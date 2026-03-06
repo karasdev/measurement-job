@@ -1,0 +1,15 @@
+{
+  "name": "measurements-dashboard",
+  "private": true,
+  "description": "Start backend, queue workers, and frontend with one command",
+  "scripts": {
+    "start": "concurrently -k -n server,generation,default,frontend -c blue,magenta,yellow,green \"npm run backend:serve\" \"npm run backend:generation\" \"npm run backend:default\" \"npm run frontend\"",
+    "backend:serve": "cd backend && php artisan serve",
+    "backend:generation": "cd backend && php artisan queue:work --queue=generation",
+    "backend:default": "cd backend && php artisan queue:work --queue=default",
+    "frontend": "cd frontend && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

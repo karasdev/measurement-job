@@ -1,0 +1,12 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+/* Ensure input/textarea text is visible (light and dark) */
+input:not([type="submit"]):not([type="button"]):not([type="hidden"]),
+textarea {
+  color: rgb(17 24 39); /* gray-900 */
+}
+.dark input:not([type="submit"]):not([type="button"]):not([type="hidden"]),
+.dark textarea {
+  color: rgb(243 244 246); /* gray-100 */
+}

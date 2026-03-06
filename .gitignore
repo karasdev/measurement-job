@@ -1,0 +1,24 @@
+# Dependencies (do not commit)
+node_modules/
+backend/vendor/
+frontend/.nuxt/
+frontend/.output/
+frontend/.data/
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+*/.env copy
+*.env.copy
+
+# Logs and OS
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

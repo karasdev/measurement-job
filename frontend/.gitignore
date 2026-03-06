@@ -1,0 +1,11 @@
+# Nuxt
+.nuxt
+.output
+.data
+*.log
+node_modules
+
+# Env
+.env
+.env.*
+!.env.example
