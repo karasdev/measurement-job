@@ -3,7 +3,7 @@
 namespace App\Events;
 
 use App\Models\MeasurementJob;
-use Illuminate\Broadcasting\Channel;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
@@ -39,7 +39,7 @@ class MeasurementJobProgress implements ShouldBroadcast
 
     public function broadcastOn(): array
     {
-        return [new Channel('measurement_job.'.$this->jobId)];
+        return [new PrivateChannel('measurement_job.'.$this->jobId)];
     }
 
     public function broadcastAs(): string

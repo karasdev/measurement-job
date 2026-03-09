@@ -11,17 +11,23 @@ export interface JobProgressPayload {
   completed_at: string | null
 }
 
-let pusher: Pusher | null = null
-
 function getPusher(): Pusher | null {
   const config = useRuntimeConfig()
   const key = config.public.pusherKey as string
   const cluster = (config.public.pusherCluster as string) || 'mt1'
-  if (!key) return null
-  if (!pusher) {
-    pusher = new Pusher(key, { cluster })
-  }
-  return pusher
+  const apiBase = (config.public.apiBase as string).replace(/\/$/, '')
+  const token = useCookie<string | null>('auth_token')
+  if (!key || !token?.value) return null
+  return new Pusher(key, {
+    cluster,
+    authEndpoint: `${apiBase}/broadcasting/auth`,
+    auth: {
+      headers: {
+        Authorization: `Bearer ${token.value}`,
+        Accept: 'application/json',
+      },
+    },
+  })
 }
 
 /**
@@ -41,7 +47,7 @@ export function useJobProgress(
   }
 
   for (const id of jobIds) {
-    const channelName = `measurement_job.${id}`
+    const channelName = `private-measurement_job.${id}`
     const channel = client.subscribe(channelName)
     channel.bind('progress', (data: JobProgressPayload) => {
       if (data && typeof data.id === 'number') onProgress(data)
@@ -52,7 +58,7 @@ export function useJobProgress(
   return () => {
     for (const { channelName, channel } of channels) {
       channel.unbind('progress')
-      client.unsubscribe(channelName)
+      client!.unsubscribe(channelName)
     }
   }
 }
