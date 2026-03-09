@@ -1,6 +1,6 @@
 # Measurements Dashboard – Full-Stack Project
 
-A full-stack web application where users submit **measurement jobs**: the backend generates a large file of `city;temperature` data, processes it in chunks, and computes **min**, **max**, and **average** temperature per city. Users see their jobs and results on a dashboard, with optional **real-time progress** and an **admin** area.
+A full-stack web application where users submit **measurement jobs**: the backend generates a large file of `city;temperature` data, processes it in chunks, and computes **min**, **max**, and **average** temperature per city. Users see their jobs and results on a dashboard, with **real-time progress** (Pusher; add credentials to enable) and an **admin** area.
 
 This README gives you an overview, setup, and run instructions. For **how the system works** (user flow, job pipeline, queues, real-time), see **[WORKFLOW.md](./WORKFLOW.md)**.
 
@@ -119,9 +119,9 @@ Open **http://localhost:3000** in the browser → Register → Log in → submit
 
 | Layer    | Technology |
 |----------|------------|
-| Backend  | **Laravel 12** (PHP), MySQL, Sanctum (API auth), **Filament v5** (admin panel at `/admin`), Queues (database driver), Pusher (optional, real-time) |
-| Frontend | **Nuxt 4** (Vue 3), **Nuxt UI**, Tailwind CSS, Chart.js, Pusher JS (optional) |
-| Real-time | **Pusher Channels** (optional) for live job progress |
+| Backend  | **Laravel 12** (PHP), MySQL, Sanctum (API auth), **Filament v5** (admin panel at `/admin`), Queues (database driver), Pusher (real-time; add credentials to enable) |
+| Frontend | **Nuxt 4** (Vue 3), **Nuxt UI**, Tailwind CSS, Chart.js, Pusher JS (real-time; add key to enable) |
+| Real-time | **Pusher Channels** (default; add credentials in backend + frontend `.env` for live job progress) |
 
 ---
 
@@ -192,19 +192,14 @@ npm start
 
 ---
 
-## Optional: Real-time progress (Pusher)
+## Real-time progress (Pusher)
+
+Real-time job progress is **enabled by default** in config; add your Pusher credentials to activate it.
 
 1. Create a **Pusher Channels** app at [pusher.com](https://pusher.com) and copy **App ID**, **Key**, **Secret**, **Cluster**.
-2. **Backend** `.env`:
-   - `BROADCAST_CONNECTION=pusher`
-   - `PUSHER_APP_ID=...`  
-   - `PUSHER_APP_KEY=...`  
-   - `PUSHER_APP_SECRET=...`  
-   - `PUSHER_APP_CLUSTER=...` (e.g. `mt1` or `ap2`)
-3. **Frontend** `.env`:
-   - `NUXT_PUBLIC_PUSHER_KEY=<same as PUSHER_APP_KEY>`
-   - `NUXT_PUBLIC_PUSHER_CLUSTER=<same as PUSHER_APP_CLUSTER>`
-4. Restart backend and frontend. Job list and detail will update live without refresh.
+2. **Backend** `.env`: set `PUSHER_APP_ID`, `PUSHER_APP_KEY`, `PUSHER_APP_SECRET`, and `PUSHER_APP_CLUSTER` (`.env.example` already has `BROADCAST_CONNECTION=pusher`).
+3. **Frontend** `.env`: set `NUXT_PUBLIC_PUSHER_KEY` (same as backend `PUSHER_APP_KEY`) and `NUXT_PUBLIC_PUSHER_CLUSTER` (same as backend, e.g. `mt1` or `ap2`).
+4. Restart backend and frontend. Job list and detail will update live without refresh. Without credentials, progress still works via **polling** (1s).
 
 ---
 
@@ -259,7 +254,7 @@ npm start
 | **Job list** | Filter by status, sort by date/status/progress/rows; **server-side pagination** (15 per page, Previous/Next, “Showing X–Y of Z jobs”). Changing filter/sort resets to page 1. |
 | **Job detail** | Status, **progress bar**: indeterminate (moving) for **generating** / **aggregating**, determinate % for **processing**; execution time, memory, error message; temperature **chart** and **temperature-by-city table** each with **client-side pagination** (20 per page). **Polling** (1s) when a job is in progress so the bar and the list row stay updated without Pusher. |
 | **Notifications** | **Toasts** (Nuxt UI) for errors only (validation, API failures); no inline error paragraphs. |
-| **Real-time** | Optional Pusher for live progress; without it, **polling** keeps the selected job’s progress bar and list row in sync. |
+| **Real-time** | Pusher for live progress (add credentials in backend + frontend `.env`); without credentials, **polling** (1s) keeps the progress bar and list row in sync. |
 | **Retry** | For failed jobs: create new job with same row count. |
 | **Admin** | Stats, all jobs, all users (only for users with `is_admin`). |
 
