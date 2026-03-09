@@ -14,7 +14,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        $middleware->validateCsrfTokens(except: [
+            'broadcasting/auth',
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->respond(function (Response $response): Response {

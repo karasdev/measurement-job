@@ -20,7 +20,7 @@ function getPusher(): Pusher | null {
   if (!key || !token?.value) return null
   return new Pusher(key, {
     cluster,
-    authEndpoint: `${apiBase}/broadcasting/auth`,
+    authEndpoint: `${apiBase}/api/broadcasting/auth`,
     auth: {
       headers: {
         Authorization: `Bearer ${token.value}`,

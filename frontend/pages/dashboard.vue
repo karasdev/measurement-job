@@ -334,12 +334,25 @@ watch(
   { immediate: true }
 )
 
+function onPageVisible() {
+  if (typeof document === 'undefined' || document.visibilityState !== 'visible') return
+  const job = selectedJob.value
+  if (job?.id) loadJobDetail(job.id)
+  loadJobs()
+}
+
 onMounted(async () => {
   await loadUser()
   await loadJobs()
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onPageVisible)
+  }
 })
 
 onUnmounted(() => {
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', onPageVisible)
+  }
   stopProgressPolling()
   stopSmoothProgress()
   if (unsubscribeProgress) unsubscribeProgress()
