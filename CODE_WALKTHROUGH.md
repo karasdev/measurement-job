@@ -82,7 +82,7 @@ This document gives a **walkthrough of the code**: what approach was taken and w
 
 **Approach:** Subscribe to Pusher channels per job ID; on each `progress` event, call a callback so the UI can update without polling.
 
-**What it does:** `getPusher()` creates or reuses one Pusher client (key and cluster from Nuxt config). **useJobProgress(jobIds, onProgress)** subscribes to `measurement_job.{id}` for each id, binds the `progress` event, and calls `onProgress` with the payload. Returns an unsubscribe function that unbinds and unsubscribes (used when job list changes or component unmounts).
+**What it does:** `getPusher()` creates a Pusher client (key, cluster, and auth endpoint from Nuxt config; requires auth token for private channels). **useJobProgress(jobIds, onProgress)** subscribes to **private** channel `private-measurement_job.{id}` for each id (auth via backend `/broadcasting/auth`), binds the `progress` event, and calls `onProgress` with the payload. Returns an unsubscribe function that unbinds and unsubscribes (used when job list changes or component unmounts).
 
 **Used in:** Dashboard only: the watch on job IDs calls `useJobProgress(ids, applyProgress)` so progress events update the list and the selected job detail.
 
@@ -113,7 +113,7 @@ This document gives a **walkthrough of the code**: what approach was taken and w
 - **Auth:** `AuthController` (register, login) creates a Sanctum token; protected routes use `auth:sanctum`. Token is sent from frontend in `Authorization` and stored in cookie.
 - **Jobs API:** `JobController` – index (list with filter/sort), store (create job + dispatch GenerateMeasurementsJob), show (one job), retry (new job, same rows).
 - **Job pipeline:** GenerateMeasurementsJob → creates file, chunks, dispatches ProcessChunkJobs in a batch; when batch done, AggregateResultsJob runs. Each progress step can call `broadcast(MeasurementJobProgress::fromJob($job))`.
-- **Real-time:** Event `MeasurementJobProgress` broadcasts on channel `measurement_job.{id}` with event name `progress` and payload (id, status, progress_percent, rows_processed, etc.). Frontend subscribes in useJobProgress and passes payload to `applyProgress`.
+- **Real-time:** Event `MeasurementJobProgress` broadcasts on **private** channel `measurement_job.{id}` with event name `progress` and payload (id, status, progress_percent, rows_processed, etc.). Backend authorizes subscription in `routes/channels.php` (job owner only). Frontend subscribes to `private-measurement_job.{id}` with Bearer token; useJobProgress passes payload to `applyProgress`.
 
 For full pipeline and queue details, see **WORKFLOW.md** and **TEACHING_GUIDE.md**.
 
