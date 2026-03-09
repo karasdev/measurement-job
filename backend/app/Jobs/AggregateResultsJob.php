@@ -21,7 +21,8 @@ class AggregateResultsJob implements ShouldQueue
 
     public array $backoff = [10, 30, 60];
 
-    public int $timeout = 600;
+    /** 15 minutes: aggregating many chunks for large jobs. */
+    public int $timeout = 900;
 
     public function __construct(
         public MeasurementJob $measurementJob

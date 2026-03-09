@@ -244,30 +244,14 @@ function setChartPage(p: number) {
   chartPage.value = Math.max(1, Math.min(p, chartPaginatedResults.value.totalPages))
 }
 
-const POLL_INTERVAL_MS = 1000
 const SMOOTH_TICK_MS = 120
 const SMOOTH_STEP = 4
 const IN_PROGRESS_STATUSES = ['generating', 'processing', 'aggregating']
 
 let unsubscribeProgress: (() => void) | null = null
-let progressPollingTimer: ReturnType<typeof setInterval> | null = null
 let smoothTimer: ReturnType<typeof setInterval> | null = null
 
 const smoothedProgressPercent = ref(0)
-
-function startProgressPolling(jobId: number) {
-  stopProgressPolling()
-  progressPollingTimer = setInterval(() => {
-    loadJobDetail(jobId)
-  }, POLL_INTERVAL_MS)
-}
-
-function stopProgressPolling() {
-  if (progressPollingTimer) {
-    clearInterval(progressPollingTimer)
-    progressPollingTimer = null
-  }
-}
 
 function startSmoothProgress() {
   if (smoothTimer) return
@@ -305,11 +289,9 @@ watch(selectedJob, () => {
 watch(
   () => ({ id: selectedJob.value?.id, status: selectedJob.value?.status }),
   ({ id, status }) => {
-    stopProgressPolling()
     stopSmoothProgress()
     if (id != null && status != null && IN_PROGRESS_STATUSES.includes(status)) {
       smoothedProgressPercent.value = displayProgress(selectedJob.value!)
-      startProgressPolling(id)
       if (status === 'processing') startSmoothProgress()
     } else if (selectedJob.value) {
       smoothedProgressPercent.value = displayProgress(selectedJob.value)
@@ -353,7 +335,6 @@ onUnmounted(() => {
   if (typeof document !== 'undefined') {
     document.removeEventListener('visibilitychange', onPageVisible)
   }
-  stopProgressPolling()
   stopSmoothProgress()
   if (unsubscribeProgress) unsubscribeProgress()
 })

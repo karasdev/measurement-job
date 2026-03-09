@@ -22,7 +22,8 @@ class ProcessChunkJob implements ShouldQueue
 
     public array $backoff = [10, 30, 60];
 
-    public int $timeout = 600;
+    /** 20 minutes: 2M-line chunks can be slow on large jobs. */
+    public int $timeout = 1200;
 
     public function __construct(
         public MeasurementJob $measurementJob,
@@ -32,16 +33,31 @@ class ProcessChunkJob implements ShouldQueue
 
     public function handle(): void
     {
-        $startTime = microtime(true);
-        $startMemory = memory_get_usage(true);
-
         $jobId = $this->measurementJob->id;
         $chunkIndex = $this->chunkIndex;
 
+        // Idempotency: if this chunk was already processed (e.g. previous attempt succeeded but job retried),
+        // skip processing to avoid double-counting rows_processed and duplicate ChunkTemperatureResult rows.
+        try {
+            if (ChunkTemperatureResult::where('measurement_job_id', $jobId)->where('chunk_index', $chunkIndex)->exists()) {
+                $this->updateJobProgressOnly($jobId);
+                return;
+            }
+        } catch (\Throwable $e) {
+            // If the check fails (e.g. table missing, DB error), proceed with normal processing.
+        }
+
+        $startTime = microtime(true);
+        $startMemory = memory_get_usage(true);
+
         $byCity = [];
-        $handle = fopen($this->chunkFilePath, 'r');
+        $chunkPath = $this->chunkFilePath;
+        if (! is_readable($chunkPath)) {
+            throw new \RuntimeException('Chunk file not found or not readable: '.$chunkPath);
+        }
+        $handle = fopen($chunkPath, 'r');
         if (! $handle) {
-            throw new \RuntimeException('Chunk file not found or not readable: '.$this->chunkFilePath);
+            throw new \RuntimeException('Chunk file not readable: '.$chunkPath);
         }
 
         while (($line = fgets($handle)) !== false) {
@@ -125,6 +141,36 @@ class ProcessChunkJob implements ShouldQueue
 
         if (file_exists($this->chunkFilePath)) {
             File::delete($this->chunkFilePath);
+        }
+    }
+
+    /**
+     * Update job progress_percent and broadcast (used when chunk was already processed on a retry).
+     */
+    private function updateJobProgressOnly(int $jobId): void
+    {
+        $job = $this->measurementJob->fresh();
+        if (! $job) {
+            return;
+        }
+        $done = ChunkTemperatureResult::where('measurement_job_id', $jobId)
+            ->select('chunk_index')
+            ->distinct()
+            ->count('chunk_index');
+        $totalChunks = $job->total_chunks;
+        if ($totalChunks === null || $totalChunks <= 0) {
+            $totalChunks = ChunkTemperatureResult::where('measurement_job_id', $jobId)
+                ->max('chunk_index') + 1;
+            $job->update(['total_chunks' => $totalChunks]);
+        }
+        if ($totalChunks > 0) {
+            $chunkPercent = (int) round($done / $totalChunks * 100);
+            $rowPercent = $job->requested_rows > 0
+                ? (int) round($job->rows_processed / $job->requested_rows * 100)
+                : 100;
+            $progressPercent = min($chunkPercent, $rowPercent, 100);
+            $job->update(['progress_percent' => $progressPercent]);
+            broadcast(MeasurementJobProgress::fromJob($job->fresh()));
         }
     }
 }

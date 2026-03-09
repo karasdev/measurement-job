@@ -11,27 +11,60 @@ export interface JobProgressPayload {
   completed_at: string | null
 }
 
-function getPusher(): Pusher | null {
-  const config = useRuntimeConfig()
-  const key = config.public.pusherKey as string
-  const cluster = (config.public.pusherCluster as string) || 'mt1'
-  const apiBase = (config.public.apiBase as string).replace(/\/$/, '')
-  const token = useCookie<string | null>('auth_token')
-  if (!key || !token?.value) return null
-  return new Pusher(key, {
-    cluster,
-    authEndpoint: `${apiBase}/api/broadcasting/auth`,
-    auth: {
+function getBroadcastClient(): Pusher | null {
+  try {
+    const config = useRuntimeConfig()
+    const apiBase = (config.public.apiBase as string).replace(/\/$/, '')
+    const token = useCookie<string | null>('auth_token')
+    if (!token?.value) return null
+
+    const auth = {
       headers: {
         Authorization: `Bearer ${token.value}`,
         Accept: 'application/json',
       },
-    },
-  })
+    }
+    const authEndpoint = `${apiBase}/api/broadcasting/auth`
+
+    // Optional: use Pusher when explicitly enabled and key is set
+    const usePusher = config.public.usePusher as boolean
+    const pusherKey = (config.public.pusherKey as string) || ''
+    if (usePusher && pusherKey) {
+      const cluster = (config.public.pusherCluster as string) || 'mt1'
+      return new Pusher(pusherKey, {
+        cluster,
+        authEndpoint,
+        auth,
+      })
+    }
+
+    // Main: use Reverb (Pusher protocol, self-hosted)
+    const reverbKey = (config.public.reverbKey as string) || ''
+    if (!reverbKey) return null
+
+    const reverbHost = config.public.reverbHost as string
+    const reverbPort = config.public.reverbPort as number
+    const reverbScheme = (config.public.reverbScheme as string) || 'http'
+    const forceTLS = reverbScheme === 'https'
+
+    return new Pusher(reverbKey, {
+      cluster: 'reverb', // required by pusher-js; ignored when wsHost is set
+      wsHost: reverbHost,
+      wsPort: reverbPort,
+      wssPort: reverbPort,
+      forceTLS,
+      disableStats: true,
+      enabledTransports: ['ws', 'wss'],
+      authEndpoint,
+      auth,
+    })
+  } catch {
+    return null
+  }
 }
 
 /**
- * Subscribe to real-time progress for the given job IDs.
+ * Subscribe to real-time progress for the given job IDs (Reverb by default, or Pusher if enabled).
  * Calls onProgress whenever a progress event is received for any of those jobs.
  * Returns an unsubscribe function.
  */
@@ -39,7 +72,7 @@ export function useJobProgress(
   jobIds: number[],
   onProgress: (payload: JobProgressPayload) => void
 ): () => void {
-  const client = getPusher()
+  const client = getBroadcastClient()
   const channels: { id: number; channelName: string; channel: ReturnType<Pusher['subscribe']> }[] = []
 
   if (!client || !jobIds.length) {

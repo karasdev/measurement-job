@@ -82,7 +82,7 @@ This project is a measurement processing system. Users can submit jobs to genera
 
 ## 7. Real-time progress — event and frontend subscription
 
-**Role:** Push progress updates to the browser so the UI updates without polling.
+**Role:** Push progress updates to the browser so the UI updates in real time (no polling).
 
 **Position:**  
 - Backend: `backend/app/Events/MeasurementJobProgress.php`.  
@@ -91,11 +91,12 @@ This project is a measurement processing system. Users can submit jobs to genera
   - `broadcastAs()`: event name is `progress`.  
   - `broadcastWith()`: returns the payload the frontend expects (id, status, progress_percent, rows_processed, etc.).  
 - Every place that updates job status or progress (GenerateMeasurementsJob, ProcessChunkJob, AggregateResultsJob, and their `failed` methods) calls `broadcast(MeasurementJobProgress::fromJob($job))`.
+- Backend uses **Laravel Reverb** by default (`BROADCAST_CONNECTION=reverb`); **Pusher** is optional (set `BROADCAST_CONNECTION=pusher` and PUSHER_* credentials to use it instead).
 - Frontend: `frontend/composables/useJobProgress.ts`.  
-  - `getPusher()`: creates or reuses a Pusher client using key and cluster from Nuxt config.  
+  - `getBroadcastClient()`: creates a Pusher-protocol client: **Reverb** by default (reverbKey, reverbHost, reverbPort, reverbScheme from Nuxt config), or **Pusher** when `usePusher` is true and pusherKey is set.  
   - `useJobProgress(jobIds, onProgress)`: for each job ID, subscribes to the channel `measurement_job.{id}`, binds the `progress` event, and calls `onProgress` with the payload. Returns an unsubscribe function that unbinds and unsubscribes.
 
-**How it works:** Backend broadcasts to a per-job channel with event name “progress”. Frontend subscribes to those channels via Pusher; when an event arrives, it updates the list and detail panel. So we get live progress without building WebSockets ourselves; Pusher is optional so the app can run without it.
+**How it works:** Backend broadcasts to a per-job channel with event name “progress”. Frontend subscribes via Reverb (main) or Pusher (optional) using the same Pusher protocol; when an event arrives, it updates the list and detail panel. No polling; if neither Reverb nor Pusher is configured, progress is shown after refresh or when re-opening a job.
 
 ---
 
@@ -116,9 +117,9 @@ This project is a measurement processing system. Users can submit jobs to genera
   - `applyProgress(payload)`: callback for real-time; updates the matching job in the list and in `selectedJob`; when status is completed, calls `loadJobDetail`.  
   - `setJobsPage(p)`, `onJobsFilterOrSortChange()`: “Your jobs” pagination and reset-to-page-1 when filter/sort changes.  
   - Helpers: `displayProgress`, `statusColor`, `formatBytes`, `logout`; `paginatedCityResults` and `setCityTablePage` for city table; `chartPaginatedResults` and `setChartPage` for chart.  
-- **Progress bar:** When status is **generating** or **aggregating**, an **indeterminate** bar (moving, like copy-paste) is shown; when **processing**, a **determinate** bar with smoothed percentage. **Polling** (every 1s) runs while the selected job is in progress so the bar and list row update even without Pusher.  
+- **Progress bar:** When status is **generating** or **aggregating**, an **indeterminate** bar (moving, like copy-paste) is shown; when **processing**, a **determinate** bar with smoothed percentage. Updates come only from **real-time** (Reverb or optional Pusher); there is no polling.  
 - **Notifications:** Only **toasts** for validation and API errors.  
-- A watch on job IDs calls `useJobProgress(ids, applyProgress)`; a watch on selected job id/status starts or stops polling and (when processing) smooth progress animation.
+- A watch on job IDs calls `useJobProgress(ids, applyProgress)`; a watch on selected job id/status sets the smoothed progress and (when processing) starts the smooth progress animation.
 
 **How it works:** One page keeps state simple; the list and detail panel are always in sync. Real-time progress is wired in one place via the `applyProgress` callback, so both the list and the detail update without refresh.
 
@@ -134,7 +135,7 @@ This project is a measurement processing system. Users can submit jobs to genera
   - Returns a `fetch` function that builds the URL, sets JSON headers, adds `Authorization: Bearer <token>` when present, and allows `body` to be a plain object (stringifies it).  
   - Also returns `token` (so callers can clear it on logout or 401) and `apiBase`.  
 - `frontend/composables/useJobProgress.ts`:  
-  - Described above: subscribe to Pusher per job ID, call callback on `progress`, return unsubscribe.
+  - Described above: subscribe to Reverb (or optional Pusher) per job ID, call callback on `progress`, return unsubscribe.
 
 **How it works:** Dashboard and admin (and any future page) use `useApi()` for all requests and one place to clear the token. Progress is always subscribed via `useJobProgress` with a callback; reuse and cleanup are in one place.
 

@@ -46,11 +46,13 @@ Then run:
 php artisan key:generate
 composer install
 php artisan migrate
+php artisan reverb:install --no-interaction
 cd ..
 ```
 
-- **`composer install`** – installs all PHP libraries (Laravel, Sanctum, Pusher SDK, etc.) into `backend/vendor/`.
+- **`composer install`** – installs all PHP libraries (Laravel, Sanctum, Reverb, Pusher SDK, etc.) into `backend/vendor/`.
 - **`php artisan migrate`** – creates the database tables.
+- **`php artisan reverb:install --no-interaction`** – adds `REVERB_APP_ID`, `REVERB_APP_KEY`, `REVERB_APP_SECRET` to `.env` for real-time progress.
 
 ### 3. Frontend: Node modules
 
@@ -62,10 +64,11 @@ cd ..
 
 - **`npm install`** – installs all frontend dependencies (Nuxt 4, Vue, Nuxt UI, Tailwind, Chart.js, Pusher JS, etc.) into `frontend/node_modules/`.
 
-Optional: create `frontend/.env` with:
+Create **`frontend/.env`** (copy from `frontend/.env.example`):
 
-- `NUXT_PUBLIC_API_BASE=http://127.0.0.1:8000`  
-(If you skip this, the default in code is already `http://127.0.0.1:8000`.)
+- `NUXT_PUBLIC_REVERB_APP_KEY=` — **must match** `REVERB_APP_KEY` in `backend/.env` (so real-time progress works). Run `php artisan reverb:install --no-interaction` in `backend/` first if you don’t have Reverb keys yet.
+- Optionally: `NUXT_PUBLIC_REVERB_HOST=127.0.0.1`, `NUXT_PUBLIC_REVERB_PORT=8080`, `NUXT_PUBLIC_REVERB_SCHEME=http`.
+- Optional: `NUXT_PUBLIC_API_BASE=http://127.0.0.1:8000` (default is already this).
 
 ### 4. Root: runner script (optional but recommended)
 
@@ -88,10 +91,11 @@ npm start
 This starts:
 
 - Laravel API at **http://127.0.0.1:8000**
-- Two queue workers (generation + default)
+- **Reverb** WebSocket server (real-time job progress)
+- Queue workers (generation + default)
 - Nuxt frontend at **http://localhost:3000**
 
-Open **http://localhost:3000** in the browser → Register → Log in → submit a job and use the dashboard.
+Open **http://localhost:3000** in the browser → Register → Log in → submit a job and use the dashboard. Real-time progress works when Reverb is running and `NUXT_PUBLIC_REVERB_APP_KEY` matches the backend.
 
 ### Summary: what gets installed where
 

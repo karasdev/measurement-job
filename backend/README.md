@@ -33,15 +33,25 @@ Failed queue jobs are retried automatically:
 
 To change retries or backoff, edit `$tries` and `$backoff` on each job class.
 
-### Real-time job progress (optional)
+### Real-time job progress (Reverb main, Pusher optional)
 
-To have the dashboard update job status and progress without refresh:
+Real-time progress uses **Laravel Reverb** by default (self-hosted WebSocket server). No polling.
 
-1. Create an app at [pusher.com](https://pusher.com) and get App ID, Key, Secret, and Cluster.
-2. In backend `.env`: set `BROADCAST_CONNECTION=pusher` and set `PUSHER_APP_ID`, `PUSHER_APP_KEY`, `PUSHER_APP_SECRET`, `PUSHER_APP_CLUSTER`.
-3. In frontend `.env` or env: set `NUXT_PUBLIC_PUSHER_KEY` to your Pusher key and `NUXT_PUBLIC_PUSHER_CLUSTER` (e.g. `mt1`).
+**Backend**
 
-If Pusher is not configured, the app still works; progress is shown after refresh or when you re-open a job.
+1. In backend `.env`: ensure `BROADCAST_CONNECTION=reverb` and set Reverb credentials (e.g. from `php artisan reverb:install`, or copy from `.env.example` and fill `REVERB_APP_ID`, `REVERB_APP_KEY`, `REVERB_APP_SECRET`; keep `REVERB_HOST=127.0.0.1`, `REVERB_PORT=8080`, `REVERB_SCHEME=http` for local).
+2. Start Reverb when developing: `php artisan reverb:start` (or use `composer dev`, which runs it with the API and queue).
+
+**Frontend**
+
+3. In frontend `.env` or env: set `NUXT_PUBLIC_REVERB_APP_KEY` to your backend `REVERB_APP_KEY`, and optionally `NUXT_PUBLIC_REVERB_HOST`, `NUXT_PUBLIC_REVERB_PORT` (default 8080), `NUXT_PUBLIC_REVERB_SCHEME` if different from defaults.
+
+**Optional: use Pusher instead**
+
+- Backend: set `BROADCAST_CONNECTION=pusher` and add `PUSHER_APP_ID`, `PUSHER_APP_KEY`, `PUSHER_APP_SECRET`, `PUSHER_APP_CLUSTER`.
+- Frontend: set `NUXT_PUBLIC_USE_PUSHER=true`, `NUXT_PUBLIC_PUSHER_KEY`, `NUXT_PUBLIC_PUSHER_CLUSTER`.
+
+If neither Reverb nor Pusher is configured, the app still works; progress is shown after refresh or when you re-open a job.
 
 ### Filament admin panel
 
