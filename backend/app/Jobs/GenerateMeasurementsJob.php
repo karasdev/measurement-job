@@ -13,6 +13,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 
 class GenerateMeasurementsJob implements ShouldQueue
@@ -42,7 +43,8 @@ class GenerateMeasurementsJob implements ShouldQueue
         broadcast(MeasurementJobProgress::fromJob($job->fresh()));
 
         $startTime = microtime(true);
-        $startMemory = memory_get_usage(true);
+        $startCurrent = memory_get_usage(true);
+        $startEmalloc = memory_get_usage(false);
 
         $dir = storage_path('app/measurement_jobs/'.$job->id);
         File::ensureDirectoryExists($dir);
@@ -52,10 +54,22 @@ class GenerateMeasurementsJob implements ShouldQueue
             'path' => $dir,
             'count' => (int) $job->requested_rows,
             'batch-size' => 500,
+            '--job-id' => (string) $job->id,
         ]);
 
         $executionMs = (int) round((microtime(true) - $startTime) * 1000);
-        $memoryUsed = memory_get_usage(true) - $startMemory;
+        $memoryUsed = null;
+        $cached = Cache::pull('gen_mem_'.$job->id);
+        if (is_array($cached)) {
+            $deltaReal = ($cached['max_current'] ?? 0) - ($cached['start_current'] ?? 0);
+            $deltaEmalloc = ($cached['max_emalloc'] ?? 0) - ($cached['start_emalloc'] ?? 0);
+            $memoryUsed = (int) max(0, $deltaReal, $deltaEmalloc);
+        }
+        if ($memoryUsed === null) {
+            $maxCurrent = max($startCurrent, memory_get_usage(true));
+            $maxEmalloc = max($startEmalloc, memory_get_usage(false));
+            $memoryUsed = (int) max(0, $maxCurrent - $startCurrent, $maxEmalloc - $startEmalloc);
+        }
         JobMetric::create([
             'measurement_job_id' => $job->id,
             'phase' => 'generating',

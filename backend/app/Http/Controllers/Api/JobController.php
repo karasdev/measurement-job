@@ -80,6 +80,8 @@ class JobController extends Controller
             ->with(['metrics', 'temperatureResults'])
             ->findOrFail($id);
 
+        $job->dispatchAggregateIfStuck();
+
         return response()->json($job);
     }
 
@@ -87,8 +89,8 @@ class JobController extends Controller
     {
         $job = MeasurementJob::where('user_id', $request->user()->id)->findOrFail($id);
 
-        if ($job->status !== 'failed') {
-            return response()->json(['message' => 'Only failed jobs can be retried.'], 422);
+        if ($job->status !== 'failed' && $job->status !== 'partial') {
+            return response()->json(['message' => 'Only failed or partial jobs can be retried.'], 422);
         }
 
         $newJob = MeasurementJob::create([

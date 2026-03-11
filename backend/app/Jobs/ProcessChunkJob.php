@@ -48,7 +48,12 @@ class ProcessChunkJob implements ShouldQueue
         }
 
         $startTime = microtime(true);
-        $startMemory = memory_get_usage(true);
+        $startCurrent = memory_get_usage(true);
+        $startEmalloc = memory_get_usage(false);
+        $maxCurrent = $startCurrent;
+        $maxEmalloc = $startEmalloc;
+        $linesRead = 0;
+        $sampleEvery = 1000;
 
         $byCity = [];
         $chunkPath = $this->chunkFilePath;
@@ -80,10 +85,17 @@ class ProcessChunkJob implements ShouldQueue
                 $byCity[$city]['sum'] += $temp;
                 $byCity[$city]['count']++;
             }
+
+            $linesRead++;
+            if ($linesRead === 1 || $linesRead % $sampleEvery === 0) {
+                $maxCurrent = max($maxCurrent, memory_get_usage(true));
+                $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
+            }
         }
         fclose($handle);
 
         $rows = [];
+        $cityIndex = 0;
         foreach ($byCity as $city => $data) {
             $rows[] = [
                 'measurement_job_id' => $jobId,
@@ -96,15 +108,29 @@ class ProcessChunkJob implements ShouldQueue
                 'created_at' => now(),
                 'updated_at' => now(),
             ];
+            $cityIndex++;
+            if ($cityIndex % 100 === 0) {
+                $maxCurrent = max($maxCurrent, memory_get_usage(true));
+                $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
+            }
         }
+
+        $maxCurrent = max($maxCurrent, memory_get_usage(true));
+        $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
 
         foreach (array_chunk($rows, 500) as $chunk) {
             ChunkTemperatureResult::insert($chunk);
+            $maxCurrent = max($maxCurrent, memory_get_usage(true));
+            $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
         }
 
         $totalRows = array_sum(array_column($byCity, 'count'));
         $executionMs = (int) round((microtime(true) - $startTime) * 1000);
-        $memoryUsed = memory_get_usage(true) - $startMemory;
+        $maxCurrent = max($maxCurrent, memory_get_usage(true));
+        $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
+        $deltaReal = $maxCurrent - $startCurrent;
+        $deltaEmalloc = $maxEmalloc - $startEmalloc;
+        $memoryUsed = (int) max(0, $deltaReal, $deltaEmalloc);
 
         JobMetric::create([
             'measurement_job_id' => $jobId,
@@ -120,22 +146,20 @@ class ProcessChunkJob implements ShouldQueue
         if ($job) {
             $done = ChunkTemperatureResult::where('measurement_job_id', $job->id)
                 ->select('chunk_index')
-                ->distinct()
-                ->count('chunk_index');
+                ->groupBy('chunk_index')
+                ->count();
             $totalChunks = $job->total_chunks;
             if ($totalChunks === null || $totalChunks <= 0) {
-                $totalChunks = ChunkTemperatureResult::where('measurement_job_id', $job->id)
-                    ->max('chunk_index') + 1;
+                $totalChunks = (int) ChunkTemperatureResult::where('measurement_job_id', $job->id)->max('chunk_index') + 1;
                 $job->update(['total_chunks' => $totalChunks]);
             }
-            if ($totalChunks > 0) {
-                $chunkPercent = (int) round($done / $totalChunks * 100);
-                $rowPercent = $job->requested_rows > 0
-                    ? (int) round($job->rows_processed / $job->requested_rows * 100)
-                    : 100;
-                $progressPercent = min($chunkPercent, $rowPercent, 100);
-                $job->update(['progress_percent' => $progressPercent]);
-            }
+            $totalChunks = (int) $totalChunks;
+            $chunkPercent = $totalChunks > 0 ? (int) round($done / $totalChunks * 100) : 0;
+            $rowPercent = $job->requested_rows > 0
+                ? (int) round($job->rows_processed / $job->requested_rows * 100)
+                : 100;
+            $progressPercent = min(max($chunkPercent, 0), max($rowPercent, 0), 100);
+            $job->update(['progress_percent' => $progressPercent]);
             broadcast(MeasurementJobProgress::fromJob($job->fresh()));
         }
 
@@ -155,22 +179,20 @@ class ProcessChunkJob implements ShouldQueue
         }
         $done = ChunkTemperatureResult::where('measurement_job_id', $jobId)
             ->select('chunk_index')
-            ->distinct()
-            ->count('chunk_index');
+            ->groupBy('chunk_index')
+            ->count();
         $totalChunks = $job->total_chunks;
         if ($totalChunks === null || $totalChunks <= 0) {
-            $totalChunks = ChunkTemperatureResult::where('measurement_job_id', $jobId)
-                ->max('chunk_index') + 1;
+            $totalChunks = (int) ChunkTemperatureResult::where('measurement_job_id', $jobId)->max('chunk_index') + 1;
             $job->update(['total_chunks' => $totalChunks]);
         }
-        if ($totalChunks > 0) {
-            $chunkPercent = (int) round($done / $totalChunks * 100);
-            $rowPercent = $job->requested_rows > 0
-                ? (int) round($job->rows_processed / $job->requested_rows * 100)
-                : 100;
-            $progressPercent = min($chunkPercent, $rowPercent, 100);
-            $job->update(['progress_percent' => $progressPercent]);
-            broadcast(MeasurementJobProgress::fromJob($job->fresh()));
-        }
+        $totalChunks = (int) $totalChunks;
+        $chunkPercent = $totalChunks > 0 ? (int) round($done / $totalChunks * 100) : 0;
+        $rowPercent = $job->requested_rows > 0
+            ? (int) round($job->rows_processed / $job->requested_rows * 100)
+            : 100;
+        $progressPercent = min(max($chunkPercent, 0), max($rowPercent, 0), 100);
+        $job->update(['progress_percent' => $progressPercent]);
+        broadcast(MeasurementJobProgress::fromJob($job->fresh()));
     }
 }

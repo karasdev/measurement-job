@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 
 class GenerateMeasurements extends Command
@@ -12,7 +13,8 @@ class GenerateMeasurements extends Command
      */
     protected $signature = 'generate:measurements {path : The file path where measurements.txt will be saved}
                                 {count : The number of measurements to generate}
-                                {batch-size=500 : The number of calculations stored before writing to the file}';
+                                {batch-size=500 : The number of calculations stored before writing to the file}
+                                {--job-id= : Optional job ID for memory tracking}';
 
     protected $description = 'Generate random weather measurements and save to a file';
 
@@ -446,6 +448,13 @@ class GenerateMeasurements extends Command
         File::put($filePath, ""); // Clear or create the file
 
         $start = microtime(true);
+        $startCurrent = memory_get_usage(true);
+        $startEmalloc = memory_get_usage(false);
+        $maxCurrent = $startCurrent;
+        $maxEmalloc = $startEmalloc;
+        $sampleEvery = 10000;
+        $jobId = $this->option('job-id');
+
         $fileHandle = fopen($filePath, 'w');
         $buffer = "";
 
@@ -460,6 +469,11 @@ class GenerateMeasurements extends Command
 
             $buffer .= "{$station[0]};$temperature\n";
 
+            if ($i === 1 || ($i > 0 && $i % $sampleEvery === 0)) {
+                $maxCurrent = max($maxCurrent, memory_get_usage(true));
+                $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
+            }
+
             if ($i > 0 && $i % $bufferSize == 0){
                 fwrite($fileHandle, $buffer);
                 $buffer = "";
@@ -471,6 +485,18 @@ class GenerateMeasurements extends Command
         }
 
         fclose($fileHandle);
+
+        if ($jobId !== null && $jobId !== '') {
+            $maxCurrent = max($maxCurrent, memory_get_usage(true));
+            $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
+            Cache::put('gen_mem_'.$jobId, [
+                'start_current' => $startCurrent,
+                'start_emalloc' => $startEmalloc,
+                'max_current' => $maxCurrent,
+                'max_emalloc' => $maxEmalloc,
+            ], 300);
+        }
+
         $totalTime = round(microtime(true) - $start, 2);
         $this->info("Generated $count measurements in $totalTime seconds. File saved at: $filePath");
     }

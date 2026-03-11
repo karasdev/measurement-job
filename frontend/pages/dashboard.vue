@@ -43,7 +43,7 @@ function applyProgress(payload: {
   }
   if (selectedJob.value?.id === payload.id) {
     selectedJob.value = { ...selectedJob.value, ...payload }
-    if (payload.status === 'completed') loadJobDetail(payload.id)
+    if (payload.status === 'completed' || payload.status === 'partial') loadJobDetail(payload.id)
   }
 }
 
@@ -55,6 +55,10 @@ interface Job {
   rows_processed: number
   execution_time_ms: number | null
   memory_used_bytes: number | null
+  memory_generating_bytes?: number | null
+  memory_processing_bytes?: number | null
+  memory_aggregate_bytes?: number | null
+  memory_total_bytes?: number | null
   error_message: string | null
   completed_at: string | null
   created_at: string
@@ -125,6 +129,10 @@ async function loadJobDetail(id: number) {
         j.rows_processed = res.rows_processed
         j.execution_time_ms = res.execution_time_ms
         j.memory_used_bytes = res.memory_used_bytes
+        j.memory_generating_bytes = res.memory_generating_bytes
+        j.memory_processing_bytes = res.memory_processing_bytes
+        j.memory_aggregate_bytes = res.memory_aggregate_bytes
+        j.memory_total_bytes = res.memory_total_bytes
         j.error_message = res.error_message
         j.completed_at = res.completed_at
       }
@@ -153,9 +161,7 @@ async function submitJob() {
     })
     jobsPage.value = 1
     await loadJobs()
-    if (res.job_id) {
-      await loadJobDetail(res.job_id)
-    }
+    // Don't open job detail automatically while job is generating
   } catch (e: any) {
     const data = e?.data
     if (e?.statusCode === 401) {
@@ -176,10 +182,11 @@ async function submitJob() {
   }
 }
 
-/** Progress never exceeds row-based % so e.g. 98M/100M shows 98% not 100% */
-function displayProgress(job: { progress_percent: number; rows_processed: number; requested_rows: number }) {
+/** Progress never exceeds row-based % so e.g. 98M/100M shows 98% not 100%. Completed: 100% only if we processed all requested rows; otherwise show actual %. */
+function displayProgress(job: { status?: string; progress_percent: number; rows_processed: number; requested_rows: number }) {
   if (!job) return 0
   const rowPct = job.requested_rows > 0 ? Math.round((job.rows_processed / job.requested_rows) * 100) : 100
+  if (job.status === 'completed' || job.status === 'partial') return Math.min(rowPct, 100)
   return Math.min(job.progress_percent, rowPct, 100)
 }
 
@@ -187,6 +194,8 @@ function statusColor(status: string) {
   switch (status) {
     case 'completed':
       return 'bg-green-100 text-green-800'
+    case 'partial':
+      return 'bg-amber-100 text-amber-800'
     case 'failed':
       return 'bg-red-100 text-red-800'
     case 'processing':
@@ -201,6 +210,7 @@ function statusColor(status: string) {
 function statusBadgeColor(status: string): 'success' | 'error' | 'primary' | 'neutral' {
   switch (status) {
     case 'completed': return 'success'
+    case 'partial': return 'neutral'
     case 'failed': return 'error'
     case 'processing':
     case 'generating':
@@ -209,11 +219,42 @@ function statusBadgeColor(status: string): 'success' | 'error' | 'primary' | 'ne
   }
 }
 
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    completed: 'Completed',
+    partial: 'Partial',
+    failed: 'Failed',
+    pending: 'Pending',
+    generating: 'Generating',
+    processing: 'Processing',
+    aggregating: 'Aggregating',
+  }
+  return labels[status] ?? status
+}
+
+function phaseLabel(status: string): string {
+  const phases: Record<string, string> = {
+    generating: 'Generating file',
+    processing: 'Processing chunks',
+    aggregating: 'Aggregating',
+    pending: 'Waiting',
+    completed: 'Completed',
+    partial: 'Partial',
+    failed: 'Failed',
+  }
+  return phases[status] ?? status
+}
+
 function formatBytes(bytes: number | null) {
   if (bytes == null) return '—'
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  const n = Math.round(bytes)
+  return n.toLocaleString() + ' B'
+}
+
+function formatKbytes(bytes: number | null) {
+  if (bytes == null) return '—'
+  const kb = bytes / 1024
+  return kb.toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' KB'
 }
 
 const paginatedCityResults = computed(() => {
@@ -250,6 +291,8 @@ const IN_PROGRESS_STATUSES = ['generating', 'processing', 'aggregating']
 
 let unsubscribeProgress: (() => void) | null = null
 let smoothTimer: ReturnType<typeof setInterval> | null = null
+let pollTimer: ReturnType<typeof setInterval> | null = null
+const POLL_INTERVAL_MS = 1500
 
 const smoothedProgressPercent = ref(0)
 
@@ -281,6 +324,28 @@ function stopSmoothProgress() {
   }
 }
 
+function startPollingJobDetail() {
+  if (pollTimer) return
+  pollTimer = setInterval(() => {
+    const job = selectedJob.value
+    if (!job?.id || !IN_PROGRESS_STATUSES.includes(job.status)) {
+      if (pollTimer) {
+        clearInterval(pollTimer)
+        pollTimer = null
+      }
+      return
+    }
+    loadJobDetail(job.id)
+  }, POLL_INTERVAL_MS)
+}
+
+function stopPollingJobDetail() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
 watch(selectedJob, () => {
   cityTablePage.value = 1
   chartPage.value = 1
@@ -290,9 +355,11 @@ watch(
   () => ({ id: selectedJob.value?.id, status: selectedJob.value?.status }),
   ({ id, status }) => {
     stopSmoothProgress()
+    stopPollingJobDetail()
     if (id != null && status != null && IN_PROGRESS_STATUSES.includes(status)) {
       smoothedProgressPercent.value = displayProgress(selectedJob.value!)
       if (status === 'processing') startSmoothProgress()
+      startPollingJobDetail()
     } else if (selectedJob.value) {
       smoothedProgressPercent.value = displayProgress(selectedJob.value)
     } else {
@@ -336,6 +403,7 @@ onUnmounted(() => {
     document.removeEventListener('visibilitychange', onPageVisible)
   }
   stopSmoothProgress()
+  stopPollingJobDetail()
   if (unsubscribeProgress) unsubscribeProgress()
 })
 
@@ -415,26 +483,53 @@ function logout() {
         </template>
         <div v-if="!jobs" class="py-8 text-center text-muted">Loading…</div>
         <div v-else-if="!jobs.data?.length" class="py-8 text-center text-muted">No jobs yet. Submit one above.</div>
-        <ul v-else class="divide-y divide-border">
-          <li
-            v-for="job in jobs.data"
-            :key="job.id"
-            class="px-4 py-3 flex flex-wrap items-center justify-between gap-2 hover:bg-muted/50 cursor-pointer rounded-md"
-            @click="loadJobDetail(job.id)"
-          >
-            <div class="flex items-center gap-3">
-              <span class="font-mono text-sm text-muted">#{{ job.id }}</span>
-              <span class="text-sm">{{ job.requested_rows.toLocaleString() }} rows</span>
-              <UBadge :color="statusBadgeColor(job.status)" variant="subtle" size="xs">
-                {{ job.status }}
-              </UBadge>
-              <span v-if="job.status !== 'pending'" class="text-xs text-muted">
-                {{ displayProgress(job) }}% · {{ job.rows_processed.toLocaleString() }} processed
-              </span>
-            </div>
-            <span class="text-xs text-muted">{{ new Date(job.created_at).toLocaleString() }}</span>
-          </li>
-        </ul>
+        <div v-else class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-border text-muted text-left">
+                <th class="px-4 py-2 font-medium w-20 text-center">#</th>
+                <th class="px-4 py-2 font-medium text-center">Rows</th>
+                <!-- <th class="px-4 py-2 font-medium text-center">Status</th> -->
+                <th class="px-4 py-2 font-medium text-center">Phase</th>
+                <th class="px-4 py-2 font-medium w-28 text-center">Progress bar</th>
+                <!-- <th class="px-4 py-2 font-medium text-center">Execution time</th>
+                <th class="px-4 py-2 font-medium text-center">Memory</th> -->
+                <th class="px-4 py-2 font-medium text-center">Progress</th>
+                <th class="px-4 py-2 font-medium text-center">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="job in jobs.data"
+                :key="job.id"
+                class="border-b border-border hover:bg-muted/50 cursor-pointer"
+                @click="loadJobDetail(job.id)"
+              >
+                <td class="px-4 py-3 font-mono text-muted text-center">#{{ job.id }}</td>
+                <td class="px-4 py-3 text-center">{{ job.requested_rows.toLocaleString() }}</td>
+                <!-- <td class="px-4 py-3 text-center">
+                  <UBadge :color="statusBadgeColor(job.status)" variant="subtle" size="xs">{{ statusLabel(job.status) }}</UBadge>
+                </td> -->
+                <td class="px-4 py-3 text-center">{{ phaseLabel(job.status) }}</td>
+                <td class="px-4 py-3 w-28 text-center">
+                  <UProgress
+                    :model-value="displayProgress(job)"
+                    :max="100"
+                    size="xs"
+                    :color="job.status === 'completed' ? 'success' : job.status === 'partial' ? 'neutral' : 'primary'"
+                  />
+                </td>
+                <!-- <td class="px-4 py-3 text-center">{{ job.execution_time_ms != null ? (job.execution_time_ms / 1000).toFixed(2) + ' s' : '—' }}</td>
+                <td class="px-4 py-3 text-center">{{ formatKbytes(job.memory_processing_bytes ?? null) }}</td> -->
+                <td class="px-4 py-3 text-center">
+                  <span v-if="job.status !== 'pending'">{{ displayProgress(job) }}% · {{ job.rows_processed.toLocaleString() }} processed</span>
+                  <span v-else class="text-muted">—</span>
+                </td>
+                <td class="px-4 py-3 text-right text-muted text-center">{{ new Date(job.created_at).toLocaleString() }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <div
           v-if="jobs && jobs.last_page > 1"
           class="px-4 py-3 border-t flex flex-wrap items-center justify-between gap-2 bg-muted/30"
@@ -480,7 +575,7 @@ function logout() {
             <h2 class="text-lg font-medium">Job #{{ selectedJob.id }}</h2>
             <div class="flex items-center gap-2">
               <UButton
-                v-if="selectedJob.status === 'failed'"
+                v-if="selectedJob.status === 'failed' || selectedJob.status === 'partial'"
                 color="warning"
                 size="sm"
                 :loading="retrying"
@@ -498,7 +593,7 @@ function logout() {
             <div>
               <span class="text-muted">Status</span>
               <p class="font-medium">
-                <UBadge :color="statusBadgeColor(selectedJob.status)" variant="subtle" size="xs">{{ selectedJob.status }}</UBadge>
+                <UBadge :color="statusBadgeColor(selectedJob.status)" variant="subtle" size="xs">{{ statusLabel(selectedJob.status) }}</UBadge>
               </p>
             </div>
             <div>
@@ -510,49 +605,9 @@ function logout() {
               <p class="font-medium">{{ selectedJob.execution_time_ms != null ? (selectedJob.execution_time_ms / 1000).toFixed(2) + ' s' : '—' }}</p>
             </div>
             <div>
-              <span class="text-muted">Memory</span>
-              <p class="font-medium">{{ formatBytes(selectedJob.memory_used_bytes) }}</p>
+              <span class="text-muted">Memory (processing)</span>
+              <p class="font-medium">{{ formatKbytes(selectedJob.memory_processing_bytes) }}</p>
             </div>
-          </div>
-          <!-- Generating: indeterminate bar (moving like copy-paste) -->
-          <div v-if="selectedJob.status === 'generating'" class="space-y-1.5">
-            <div class="flex justify-between text-sm">
-              <span class="text-muted">Generating file…</span>
-            </div>
-            <UProgress :model-value="null" size="md" color="primary" />
-          </div>
-          <!-- Processing: determinate bar with percentage -->
-          <div v-else-if="selectedJob.status === 'processing'" class="space-y-1.5">
-            <div class="flex justify-between text-sm">
-              <span class="text-muted">Processing chunks…</span>
-              <span class="font-medium">{{ smoothedProgressPercent }}%</span>
-            </div>
-            <UProgress
-              :model-value="smoothedProgressPercent"
-              :max="100"
-              size="md"
-              color="primary"
-            />
-          </div>
-          <!-- Aggregating: indeterminate bar (moving like copy-paste) -->
-          <div v-else-if="selectedJob.status === 'aggregating'" class="space-y-1.5">
-            <div class="flex justify-between text-sm">
-              <span class="text-muted">Aggregating results…</span>
-            </div>
-            <UProgress :model-value="null" size="md" color="primary" />
-          </div>
-          <div v-else-if="selectedJob.status === 'pending'" class="space-y-1.5">
-            <div class="flex justify-between text-sm">
-              <span class="text-muted">Waiting to start</span>
-            </div>
-            <UProgress :model-value="0" :max="100" size="md" color="neutral" />
-          </div>
-          <div v-else-if="selectedJob.status === 'completed'" class="space-y-1.5">
-            <div class="flex justify-between text-sm">
-              <span class="text-muted">Completed</span>
-              <span class="font-medium">100%</span>
-            </div>
-            <UProgress :model-value="100" :max="100" size="md" color="success" />
           </div>
           <p v-if="selectedJob.error_message" class="text-error text-sm">{{ selectedJob.error_message }}</p>
           <div v-if="selectedJob.temperature_results?.length" class="space-y-4">
