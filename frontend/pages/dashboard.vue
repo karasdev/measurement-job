@@ -605,7 +605,7 @@ function logout() {
               <p class="font-medium">{{ selectedJob.execution_time_ms != null ? (selectedJob.execution_time_ms / 1000).toFixed(2) + ' s' : '—' }}</p>
             </div>
             <div>
-              <span class="text-muted">Memory (processing)</span>
+              <span class="text-muted">Memory</span>
               <p class="font-medium">{{ formatKbytes(selectedJob.memory_processing_bytes) }}</p>
             </div>
           </div>
