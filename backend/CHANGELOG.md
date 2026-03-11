@@ -1,5 +1,7 @@
 # Release Notes
 
+This file tracks **Laravel skeleton** updates. For project-specific changes (jobs, dashboard, real-time), see the root **README.md** and **CODE_WALKTHROUGH.md**.
+
 ## [Unreleased](https://github.com/laravel/laravel/compare/v12.11.1...12.x)
 
 ## [v12.11.1](https://github.com/laravel/laravel/compare/v12.11.0...v12.11.1) - 2025-12-23

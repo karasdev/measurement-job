@@ -1,13 +1,13 @@
 # Code Walkthrough – Approach, Functions, and Frontend Usage
 
-This document gives a **walkthrough of the code**: what approach was taken and why, what every important function does, and what is used in the frontend. Use it together with **WORKFLOW.md** (flow) and **TEACHING_GUIDE.md** (sessions).
+This document gives a **walkthrough of the code**: what approach was taken and why, what every important function does, and what is used in the frontend. Use it together with **guide.md** (flow) and **APPROACH_AND_REASONS.md** (design decisions).
 
 ---
 
 ## Overall approach
 
 - **Backend:** Laravel API with Sanctum (token in cookie). Heavy work (generate file, process chunks, aggregate) runs in **queue jobs**, not in the HTTP request. Optional **Pusher** broadcasts progress so the frontend can update in real time.
-- **Frontend:** Nuxt 4 (Vue 3), Nuxt UI. One dashboard page: **Your jobs** list with **server-side pagination** (page, per_page, Previous/Next); selected job detail with **progress bar** (indeterminate for generating/aggregating, determinate for processing; polling every 1s when in progress; smoothed %). **Chart** and **temperature-by-city table** each have **client-side pagination** (20 per page). **useApi** for all API calls. **useJobProgress** for Pusher; **polling** keeps progress bar and list row in sync when Pusher is not used. **Notifications:** toasts for errors only.
+- **Frontend:** Nuxt 4 (Vue 3), Nuxt UI. One dashboard page: **Your jobs** table (columns: #, Rows, Status, Phase, Progress bar, Execution time, Memory in KB, Progress text, Date) with **server-side pagination** (15 per page). Submitting a job does **not** auto-open the detail panel. Selected job detail: grid (Status, Progress %, Execution time, Memory in KB); **Retry** for failed or partial; **chart** and **temperature-by-city table** with **client-side pagination** (20 per page). **useApi** for all API calls. **useJobProgress** (Reverb default or Pusher) for real-time; list refetches when a job completes or is partial so Memory updates; **polling** when selected job is in progress. **Notifications:** toasts for errors only.
 - **Auth:** Cookie `auth_token`; middleware checks it before dashboard/admin; **useApi** sends `Authorization: Bearer <token>` on every request.
 
 ---
@@ -45,26 +45,27 @@ This document gives a **walkthrough of the code**: what approach was taken and w
 
 | Function | What it does | Used where |
 |----------|--------------|------------|
-| **applyProgress(payload)** | Receives a progress event from real time; updates the matching job in `jobs.value.data` and, if that job is selected, updates `selectedJob` and calls `loadJobDetail` when status becomes `completed`. | Passed to `useJobProgress(ids, applyProgress)` in the watch. |
+| **applyProgress(payload)** | Receives a progress event from real time; updates the matching job in `jobs.value.data`; when status is **completed** or **partial**, calls `loadJobs()` to refetch the list (so Memory column is correct) and, if that job is selected, updates `selectedJob` and calls `loadJobDetail`. | Passed to `useJobProgress(ids, applyProgress)` in the watch. |
 | **loadUser()** | Calls `apiFetch('/api/user')`, sets `user.value`. On failure, clears token and redirects to login. | `onMounted`. Header uses `user`. |
 | **loadJobs()** | Builds query from `statusFilter`, `sortBy`, `sortOrder`, **page**, **per_page**; calls `apiFetch('/api/jobs?...')`; sets `jobs.value`. | `onMounted`, after submit (with page 1), after retry (page 1), and when filter/sort or page changes. |
-| **loadJobDetail(id)** | Fetches `GET /api/jobs/:id`, sets `selectedJob.value`, and **updates the same job in `jobs.value.data`** so the list row shows the same progress as the detail bar. | Click on a list row; from `applyProgress` when job completes; from `submitJob` and `retryJob`; called every 1s by **polling** when the selected job is in progress. |
+| **loadJobDetail(id)** | Fetches `GET /api/jobs/:id`, sets `selectedJob.value`, and **updates the same job in `jobs.value.data`** so the list row stays in sync. | Click on a list row; from `applyProgress` when job completes or is partial (and that job is selected); from `retryJob`; called by **polling** when the selected job is in progress. Not called after `submitJob` (detail does not auto-open). |
 | **setJobsPage(p)** | Sets `jobsPage` to p (clamped to 1..last_page), calls `loadJobs()`. | Previous/Next under “Your jobs” list. |
 | **onJobsFilterOrSortChange()** | Sets `jobsPage` to 1, calls `loadJobs()`. | When status filter, sort by, or sort order changes. |
-| **retryJob(id)** | POSTs `/api/jobs/:id/retry`, reloads list, then loads the (new) job into detail. Errors shown via **toast**. | “Retry job” button in detail panel. |
-| **submitJob()** | Validates `rows` (10k–1B), POSTs `/api/jobs` with `{ rows: num }`, reloads list and opens the new job in detail. On 401, clears token and redirects to login. Validation and API errors shown via **toast** only. | Form submit; button disabled by `submitting`. |
-| **displayProgress(job)** | Returns a percentage capped by rows processed and 100 so we never show &gt;100%. | Job list and detail panel (progress %). |
-| **statusColor(status)** | Returns Tailwind classes for status (green/red/blue/gray). | List and detail (status badges). |
-| **formatBytes(bytes)** | Formats bytes as B / KB / MB. | Detail panel (memory). |
+| **retryJob(id)** | POSTs `/api/jobs/:id/retry` (allowed for **failed** or **partial**), reloads list, then loads the (new) job into detail. Errors shown via **toast**. | “Retry job” button in detail panel. |
+| **submitJob()** | Validates `rows` (10k–1B), POSTs `/api/jobs` with `{ rows: num }`, reloads list; **does not** open the new job in detail. On 401, clears token and redirects to login. Validation and API errors shown via **toast** only. | Form submit; button disabled by `submitting`. |
+| **displayProgress(job)** | Returns a percentage: for completed/partial, row-based (rows_processed/requested_rows) capped at 100; otherwise progress_percent. | Job list (progress bar and text) and detail panel (progress %). |
+| **statusLabel(status)** / **phaseLabel(status)** | Human-readable status and phase labels. | List and detail. |
+| **statusBadgeColor(status)** | Badge color for status (e.g. success/error/neutral). | List and detail (UBadge). |
+| **formatKbytes(bytes)** | Formats bytes as KB (or “—”). | List and detail (Memory column / memory in grid). |
 | **logout()** | Sets `token.value = null`, navigates to `/login`. | “Logout” button in header. |
 
-**Watch:** When the list of job IDs in `jobs.value.data` changes, it unsubscribes from the previous real-time subscription and calls `useJobProgress(ids, applyProgress)` so progress events for the current list update the UI.
+**Watch:** When the list of job IDs in `jobs.value.data` changes, it unsubscribes from the previous real-time subscription and calls `useJobProgress(ids, applyProgress)` so progress events for the current list update the UI. When a job completes or is partial, `applyProgress` calls `loadJobs()` so the list (including Memory) is refetched.
 
-**Lifecycle:** `onMounted` runs `loadUser()` then `loadJobs()`. `onUnmounted` unsubscribes from progress.
+**Lifecycle:** `onMounted` runs `loadUser()` then `loadJobs()`. `onUnmounted` unsubscribes from progress and stops polling.
 
-**Progress:** When the selected job is **generating** or **aggregating**, an indeterminate `UProgress` (moving bar) is shown; when **processing**, a determinate bar bound to `smoothedProgressPercent`. Polling (1s) runs while the job is in progress so the bar and the list row stay in sync without Pusher.
+**Progress:** The **list** is a table with a progress bar column (`UProgress`, size xs) per job and Memory in KB. The **detail panel** shows Status, Progress %, Execution time, Memory (KB); no progress bars. Polling runs while the selected job is in progress so the detail stays in sync.
 
-**Template (what’s used where):** Header uses `user`, `logout`. New-job section uses `rows`, `submitting`, `submitJob` (errors via toast). **Your jobs** list uses `jobs.data`, `statusFilter`, `sortBy`, `sortOrder`, `loadJobDetail`, `statusColor`, `displayProgress`, and **pagination** (`setJobsPage`, “Showing X–Y of Z jobs”, Previous/Next). Detail panel uses `selectedJob`, progress bar (indeterminate or `smoothedProgressPercent`), `formatBytes`, `statusColor`, `retryJob`, `retrying`, `JobTemperatureChart` with `chartPaginatedResults.rows`, and city table with `paginatedCityResults.rows` and pagination.
+**Template (what’s used where):** Header uses `user`, `logout`. New-job section uses `rows`, `submitting`, `submitJob` (errors via toast). **Your jobs** table uses `jobs.data`, `statusFilter`, `sortBy`, `sortOrder`, `loadJobDetail`, `statusLabel`, `phaseLabel`, `statusBadgeColor`, `displayProgress`, `formatKbytes`, progress bar column, and **pagination** (`setJobsPage`, “Showing X–Y of Z jobs”, Previous/Next). Detail panel uses `selectedJob`, grid (status, progress %, execution time, memory), `retryJob` (failed or partial), `retrying`, `JobTemperatureChart` with `chartPaginatedResults.rows`, and city table with `paginatedCityResults.rows` and pagination.
 
 ---
 
@@ -80,9 +81,9 @@ This document gives a **walkthrough of the code**: what approach was taken and w
 
 ### 3. `frontend/composables/useJobProgress.ts`
 
-**Approach:** Subscribe to Pusher channels per job ID; on each `progress` event, call a callback so the UI can update without polling.
+**Approach:** Subscribe to Reverb (default) or Pusher channels per job ID; on each `progress` event, call a callback so the UI can update without polling.
 
-**What it does:** `getPusher()` creates a Pusher client (key, cluster, and auth endpoint from Nuxt config; requires auth token for private channels). **useJobProgress(jobIds, onProgress)** subscribes to **private** channel `private-measurement_job.{id}` for each id (auth via backend `/broadcasting/auth`), binds the `progress` event, and calls `onProgress` with the payload. Returns an unsubscribe function that unbinds and unsubscribes (used when job list changes or component unmounts).
+**What it does:** `getBroadcastClient()` creates a Pusher-protocol client: **Reverb** by default (reverbKey, reverbHost, reverbPort, reverbScheme from Nuxt config) or **Pusher** when `usePusher` is true and pusherKey is set. **useJobProgress(jobIds, onProgress)** subscribes to **private** channel `private-measurement_job.{id}` for each id (auth via backend `/broadcasting/auth`), binds the `progress` event, and calls `onProgress` with the payload. Returns an unsubscribe function that unbinds and unsubscribes (used when job list changes or component unmounts).
 
 **Used in:** Dashboard only: the watch on job IDs calls `useJobProgress(ids, applyProgress)` so progress events update the list and the selected job detail.
 
@@ -112,14 +113,14 @@ This document gives a **walkthrough of the code**: what approach was taken and w
 
 - **Auth:** `AuthController` (register, login) creates a Sanctum token; protected routes use `auth:sanctum`. Token is sent from frontend in `Authorization` and stored in cookie.
 - **Jobs API:** `JobController` – index (list with filter/sort), store (create job + dispatch GenerateMeasurementsJob), show (one job), retry (new job, same rows).
-- **Job pipeline:** GenerateMeasurementsJob → creates file, chunks, dispatches ProcessChunkJobs in a batch; when batch done, AggregateResultsJob runs. Each progress step can call `broadcast(MeasurementJobProgress::fromJob($job))`.
-- **Real-time:** Event `MeasurementJobProgress` broadcasts on **private** channel `measurement_job.{id}` with event name `progress` and payload (id, status, progress_percent, rows_processed, etc.). Backend authorizes subscription in `routes/channels.php` (job owner only). Frontend subscribes to `private-measurement_job.{id}` with Bearer token; useJobProgress passes payload to `applyProgress`.
+- **Job pipeline:** GenerateMeasurementsJob → creates file, chunks, dispatches ProcessChunkJobs in a batch; when batch done, AggregateResultsJob runs. AggregateResultsJob sets job `memory_used_bytes` to the sum of chunk processing memory and marks job completed or partial. Each progress step can call `broadcast(MeasurementJobProgress::fromJob($job))`.
+- **Real-time:** Event `MeasurementJobProgress` broadcasts on **private** channel `measurement_job.{id}` with event name `progress` and payload (id, status, progress_percent, rows_processed, memory_used_bytes, etc.). Backend authorizes subscription in `routes/channels.php` (job owner only). Frontend subscribes to `private-measurement_job.{id}` with Bearer token; useJobProgress passes payload to `applyProgress`. When status is completed or partial, the frontend refetches the job list so the Memory column is correct.
 
 For full pipeline and queue details, see **WORKFLOW.md** and **TEACHING_GUIDE.md**.
 
 ---
 
-## How this document helps the student
+## How this document helps the user
 
 - **Approach and why:** First section and each file’s “Approach” line.
 - **What every function does:** Tables under each frontend file.

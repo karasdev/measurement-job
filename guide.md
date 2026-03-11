@@ -100,28 +100,30 @@ This project is a measurement processing system. Users can submit jobs to genera
 
 ---
 
-## 8. Dashboard UI — one page, list and detail panel
+## 8. Dashboard UI — one page, list table and detail panel
 
 **Role:** Single place to see jobs, submit a job, and see one job’s details and chart.
 
 **Position:**  
 - `frontend/pages/dashboard.vue`: one page, no separate route for `/job/:id`.  
 - Page meta: `definePageMeta({ middleware: 'auth' })` so only logged-in users see it.  
-- State: `user`, `jobs` (paginated list with `page`, `total`, `from`, `to`), `selectedJob`, `rows`, `submitting`, filters and sort, `retrying`, `jobsPage`/`jobsPerPage` (15) for **Your jobs** list pagination, `cityTablePage`/`cityTablePerPage` (20), `chartPage`/`chartPerPage` (20), `smoothedProgressPercent` for the progress bar.  
+- State: `user`, `jobs` (paginated list with `page`, `total`, `from`, `to`), `selectedJob`, `rows`, `submitting`, filters and sort, `retrying`, `jobsPage`/`jobsPerPage` (15) for **Your jobs** list pagination, `cityTablePage`/`cityTablePerPage` (20), `chartPage`/`chartPerPage` (20), `smoothedProgressPercent` for the detail progress (when selected job is processing).  
 - Key functions:  
   - `loadUser()`: fetches `/api/user`, sets `user`; on failure clears token and redirects to login.  
-  - `loadJobs()`: builds query from filters/sort **and page/per_page**, calls `/api/jobs`, sets `jobs`; used for “Your jobs” list.  
-  - `loadJobDetail(id)`: fetches `/api/jobs/:id`, sets `selectedJob`, and **updates the same job in `jobs.value.data`** so the list row shows the same progress as the detail bar.  
-  - `submitJob()`: validates rows (e.g. 10k–1B), POSTs `/api/jobs`, resets to page 1, reloads list and opens the new job; errors via **toast**.  
-  - `retryJob(id)`: POSTs retry, resets to page 1, reloads list, loads the new job; errors via toast.  
-  - `applyProgress(payload)`: callback for real-time; updates the matching job in the list and in `selectedJob`; when status is completed, calls `loadJobDetail`.  
+  - `loadJobs()`: builds query from filters/sort **and page/per_page**, calls `/api/jobs`, sets `jobs`; used for “Your jobs” table.  
+  - `loadJobDetail(id)`: fetches `/api/jobs/:id`, sets `selectedJob`, and **updates the same job in `jobs.value.data`** so the list row stays in sync.  
+  - `submitJob()`: validates rows (e.g. 10k–1B), POSTs `/api/jobs`, resets to page 1, reloads list; **does not** open the new job in the detail panel; errors via **toast**.  
+  - `retryJob(id)`: POSTs retry (allowed for **failed** or **partial** jobs), resets to page 1, reloads list, opens the new job in detail; errors via toast.  
+  - `applyProgress(payload)`: callback for real-time; updates the matching job in the list and in `selectedJob`; when status is **completed** or **partial**, **refetches the list** (`loadJobs()`) so the Memory column gets the server value, and if that job is selected, calls `loadJobDetail`.  
   - `setJobsPage(p)`, `onJobsFilterOrSortChange()`: “Your jobs” pagination and reset-to-page-1 when filter/sort changes.  
-  - Helpers: `displayProgress`, `statusColor`, `formatBytes`, `logout`; `paginatedCityResults` and `setCityTablePage` for city table; `chartPaginatedResults` and `setChartPage` for chart.  
-- **Progress bar:** When status is **generating** or **aggregating**, an **indeterminate** bar (moving, like copy-paste) is shown; when **processing**, a **determinate** bar with smoothed percentage. Updates come only from **real-time** (Reverb or optional Pusher); there is no polling.  
+  - Helpers: `displayProgress` (row-based % for completed/partial), `statusLabel`, `phaseLabel`, `statusBadgeColor`, `formatKbytes` (memory in KB), `logout`; `paginatedCityResults` and `setCityTablePage` for city table; `chartPaginatedResults` and `setChartPage` for chart.  
+- **Your jobs list:** A **table** with columns: #, Rows, Status, Phase, Progress bar (UProgress, xs), Execution time, Memory (KB; `memory_processing_bytes ?? memory_used_bytes`), Progress text, Date. Vertically center-aligned cells. Server-side pagination (15 per page).  
+- **Job detail panel:** Grid only: Status, Progress %, Execution time, Memory (processing, in KB); error message; **Retry** for failed or partial. Temperature chart and temperature-by-city table with client-side pagination (20 per page). **Polling** when the selected job is in progress.  
+- **Progress:** List has a progress bar column per job. Detail does not show progress bars; it shows the numeric progress %. When selected job is **processing**, polling (e.g. 1.5s) and optional real-time keep it in sync.  
 - **Notifications:** Only **toasts** for validation and API errors.  
-- A watch on job IDs calls `useJobProgress(ids, applyProgress)`; a watch on selected job id/status sets the smoothed progress and (when processing) starts the smooth progress animation.
+- A watch on job IDs calls `useJobProgress(ids, applyProgress)`; a watch on selected job id/status starts polling when in progress and sets smoothed progress for the detail.
 
-**How it works:** One page keeps state simple; the list and detail panel are always in sync. Real-time progress is wired in one place via the `applyProgress` callback, so both the list and the detail update without refresh.
+**How it works:** One page keeps state simple; the list and detail panel stay in sync. Real-time progress updates the list and selected job; when a job completes or is partial, the list is refetched so the Memory column shows the correct value without opening the job.
 
 ---
 

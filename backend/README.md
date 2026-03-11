@@ -29,7 +29,7 @@ Failed queue jobs are retried automatically:
 
 - **GenerateMeasurementsJob:** 3 tries, backoff 10s → 30s → 60s, timeout 1 hour. After all retries, the measurement job is marked failed with the exception message.
 - **ProcessChunkJob:** 3 tries, backoff 10s → 30s → 60s, timeout 10 minutes. If all retries fail, the batch fails and the measurement job is marked "One or more chunk jobs failed".
-- **AggregateResultsJob:** 3 tries, backoff 10s → 30s → 60s, timeout 10 minutes. After all retries, the measurement job is marked failed with the exception message.
+- **AggregateResultsJob:** 3 tries, backoff 10s → 30s → 60s, timeout 15 minutes. On success it sets the job’s `memory_used_bytes` to the sum of chunk processing memory and marks the job completed or partial. After all retries, the measurement job is marked failed with the exception message.
 
 To change retries or backoff, edit `$tries` and `$backoff` on each job class.
 
@@ -51,7 +51,7 @@ Real-time progress uses **Laravel Reverb** by default (self-hosted WebSocket ser
 - Backend: set `BROADCAST_CONNECTION=pusher` and add `PUSHER_APP_ID`, `PUSHER_APP_KEY`, `PUSHER_APP_SECRET`, `PUSHER_APP_CLUSTER`.
 - Frontend: set `NUXT_PUBLIC_USE_PUSHER=true`, `NUXT_PUBLIC_PUSHER_KEY`, `NUXT_PUBLIC_PUSHER_CLUSTER`.
 
-If neither Reverb nor Pusher is configured, the app still works; progress is shown after refresh or when you re-open a job.
+If neither Reverb nor Pusher is configured, the app still works; progress is shown after refresh or when you re-open a job. The frontend refetches the job list when a job completes or is partial so the Memory column in the list stays correct.
 
 ### Filament admin panel
 

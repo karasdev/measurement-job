@@ -1,8 +1,8 @@
 # Measurements Dashboard – Full-Stack Project
 
-A full-stack web application where users submit **measurement jobs**: the backend generates a large file of `city;temperature` data, processes it in chunks, and computes **min**, **max**, and **average** temperature per city. Users see their jobs and results on a dashboard, with **real-time progress** (Pusher; add credentials to enable) and an **admin** area.
+A full-stack web application where users submit **measurement jobs**: the backend generates a large file of `city;temperature` data, processes it in chunks, and computes **min**, **max**, and **average** temperature per city. Users see their jobs and results on a dashboard, with **real-time progress** (Reverb by default, or Pusher with credentials) and an **admin** area.
 
-This README gives you an overview, setup, and run instructions. For **how the system works** (user flow, job pipeline, queues, real-time), see **[WORKFLOW.md](./WORKFLOW.md)**.
+This README gives you an overview, setup, and run instructions. For **how the system works** (user flow, job pipeline, queues, real-time), see **[guide.md](./guide.md)** and **[CODE_WALKTHROUGH.md](./CODE_WALKTHROUGH.md)**.
 
 ---
 
@@ -115,7 +115,7 @@ Open **http://localhost:3000** in the browser → Register → Log in → submit
 
 - **Users** register, log in, and submit jobs with a **number of rows** (e.g. 10,000 to 1,000,000,000).
 - **Backend** generates a text file (`city;temperature` per line), splits it into chunks, processes each chunk (min/max/sum/count per city), then **aggregates** results into one table per job.
-- **Frontend** shows a job list (with filter/sort), job detail (status, progress, execution time, memory, **temperature chart** and table), **retry** for failed jobs, and (for admins) an **Admin** dashboard (stats, all jobs, all users).
+- **Frontend** shows a job list **table** (filter/sort, status, phase, progress bar, execution time, **memory in KB**, progress text, date) with server-side pagination; **job detail** (status, progress %, execution time, memory; **temperature chart** and table); **retry** for failed or partial jobs; and (for admins) an **Admin** dashboard (stats, all jobs, all users). Submitting a job does not auto-open the detail panel; the list refetches when a job completes so the Memory column updates without opening the job.
 
 ---
 
@@ -125,7 +125,7 @@ Open **http://localhost:3000** in the browser → Register → Log in → submit
 |----------|------------|
 | Backend  | **Laravel 12** (PHP), MySQL, Sanctum (API auth), **Filament v5** (admin panel at `/admin`), Queues (database driver), Pusher (real-time; add credentials to enable) |
 | Frontend | **Nuxt 4** (Vue 3), **Nuxt UI**, Tailwind CSS, Chart.js, Pusher JS (real-time; add key to enable) |
-| Real-time | **Pusher Channels** (default; add credentials in backend + frontend `.env` for live job progress) |
+| Real-time | **Laravel Reverb** (default; WebSocket server); optional **Pusher** (add credentials in backend + frontend `.env` for live job progress). Polling when a job is in progress keeps the list and detail in sync. |
 
 ---
 
@@ -190,20 +190,17 @@ npm start
 ### 4. Use the app
 
 1. Open http://localhost:3000 → Register → Log in.
-2. On the **Dashboard**, enter a number of rows (e.g. **50000**) and click **Submit job**.
-3. Click a job in the list to see status, progress, and (when completed) the **temperature chart** and results table.
-4. Use **filter** (status) and **sort** (date, status, progress, rows). For **failed** jobs, use **Retry job**.
+2. On the **Dashboard**, enter a number of rows (e.g. **50000**) and click **Submit job** (the new job appears in the list; detail panel does not open automatically).
+3. Click a job row in the table to open its detail (status, progress %, execution time, memory; when completed, **temperature chart** and results table).
+4. Use **filter** (status) and **sort** (date, status, progress, rows). For **failed** or **partial** jobs, use **Retry job**.
 
 ---
 
-## Real-time progress (Pusher)
+## Real-time progress (Reverb / Pusher)
 
-Real-time job progress is **enabled by default** in config; add your Pusher credentials to activate it.
+**Default:** Laravel **Reverb** (self-hosted WebSocket). After `php artisan reverb:install`, set `NUXT_PUBLIC_REVERB_APP_KEY` in `frontend/.env` to match `REVERB_APP_KEY` in `backend/.env`. The job list subscribes to progress for all visible job IDs; when a job completes or is partial, the list is refetched so the **Memory** column shows the correct value. **Polling** (e.g. 1.5s) runs while the selected job is in progress so the detail panel stays in sync.
 
-1. Create a **Pusher Channels** app at [pusher.com](https://pusher.com) and copy **App ID**, **Key**, **Secret**, **Cluster**.
-2. **Backend** `.env`: set `PUSHER_APP_ID`, `PUSHER_APP_KEY`, `PUSHER_APP_SECRET`, and `PUSHER_APP_CLUSTER` (`.env.example` already has `BROADCAST_CONNECTION=pusher`).
-3. **Frontend** `.env`: set `NUXT_PUBLIC_PUSHER_KEY` (same as backend `PUSHER_APP_KEY`) and `NUXT_PUBLIC_PUSHER_CLUSTER` (same as backend, e.g. `mt1` or `ap2`).
-4. Restart backend and frontend. Job list and detail will update live without refresh. Without credentials, progress still works via **polling** (1s).
+**Optional Pusher:** To use Pusher instead of Reverb: (1) Create a Pusher app at [pusher.com](https://pusher.com). (2) **Backend** `.env`: set `BROADCAST_CONNECTION=pusher`, `PUSHER_APP_ID`, `PUSHER_APP_KEY`, `PUSHER_APP_SECRET`, `PUSHER_APP_CLUSTER`. (3) **Frontend** `.env`: set `NUXT_PUBLIC_USE_PUSHER=true`, `NUXT_PUBLIC_PUSHER_KEY`, `NUXT_PUBLIC_PUSHER_CLUSTER`. Restart backend and frontend.
 
 ---
 
@@ -244,7 +241,9 @@ Real-time job progress is **enabled by default** in config; add your Pusher cred
 │   ├── pages/               # index, login, register, dashboard, admin/index
 │   └── .env
 ├── README.md                # This file
-└── WORKFLOW.md              # How the system works (for teaching)
+├── guide.md                 # How the system works (stack, auth, jobs, real-time, dashboard)
+├── CODE_WALKTHROUGH.md      # Code walkthrough and frontend usage
+└── APPROACH_AND_REASONS.md  # Design decisions and reasons
 ```
 
 ---
@@ -255,21 +254,21 @@ Real-time job progress is **enabled by default** in config; add your Pusher cred
 |--------|-------------|
 | **Auth** | Register, login, logout (Sanctum; token in cookie). |
 | **Submit job** | POST rows (10k–1B); backend queues generation and processing. |
-| **Job list** | Filter by status, sort by date/status/progress/rows; **server-side pagination** (15 per page, Previous/Next, “Showing X–Y of Z jobs”). Changing filter/sort resets to page 1. |
-| **Job detail** | Status, **progress bar**: indeterminate (moving) for **generating** / **aggregating**, determinate % for **processing**; execution time, memory, error message; temperature **chart** and **temperature-by-city table** each with **client-side pagination** (20 per page). **Polling** (1s) when a job is in progress so the bar and the list row stay updated without Pusher. |
+| **Job list** | **Table** with columns: #, Rows, Status, Phase, Progress bar, Execution time, Memory (KB), Progress text, Date. Filter by status, sort by date/status/progress/rows; **server-side pagination** (15 per page). List **refetches** when a job completes or is partial so Memory updates without opening the job. |
+| **Job detail** | Grid: Status, Progress %, Execution time, Memory (processing, in KB); error message; **Retry** for failed or partial. Temperature **chart** and **temperature-by-city table** with **client-side pagination** (20 per page). **Polling** when the selected job is in progress. |
 | **Notifications** | **Toasts** (Nuxt UI) for errors only (validation, API failures); no inline error paragraphs. |
-| **Real-time** | Pusher for live progress (add credentials in backend + frontend `.env`); without credentials, **polling** (1s) keeps the progress bar and list row in sync. |
-| **Retry** | For failed jobs: create new job with same row count. |
+| **Real-time** | Reverb (default) or optional Pusher; list subscribes to progress for visible job IDs; list refetch on completed/partial so Memory is correct. Polling when selected job is in progress. |
+| **Retry** | For **failed** or **partial** jobs: create new job with same row count. |
 | **Admin** | Stats, all jobs, all users (only for users with `is_admin`). |
 
 ---
 
 ## Where to learn more
 
-- **Setup / run:** This README and `backend/README.md`.
-- **How it works (workflow, queues, real-time):** **[WORKFLOW.md](./WORKFLOW.md)** – use this to teach the flow to a student.
-- **Code walkthrough (approach, every function, what’s used in the front):** **[CODE_WALKTHROUGH.md](./CODE_WALKTHROUGH.md)** – for the student who wants a full code explanation.
-- **Teaching order and how to make a video:** **[TEACHING_GUIDE.md](./TEACHING_GUIDE.md)** – sessions, “where in the code,” and a “How to make a walkthrough video” section.
+- **Setup / run:** This README and `backend/README.md`, `frontend/README.md`.
+- **How it works (workflow, queues, real-time):** **[guide.md](./guide.md)** – stack, auth, jobs, real-time, dashboard.
+- **Code walkthrough (approach, every function, what’s used in the front):** **[CODE_WALKTHROUGH.md](./CODE_WALKTHROUGH.md)** – full code explanation and frontend usage.
+- **Design decisions:** **[APPROACH_AND_REASONS.md](./APPROACH_AND_REASONS.md)** – why each approach was chosen. – sessions, “where in the code,” and a “How to make a walkthrough video” section.
 
 ---
 
