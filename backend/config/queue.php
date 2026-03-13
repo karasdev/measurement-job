@@ -40,7 +40,7 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 1500), // must exceed longest job timeout (ProcessChunkJob 1200s)
+            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 7500), // must exceed longest job timeout (GenerateMeasurementsJob 7200s)
             'after_commit' => false,
         ],
 

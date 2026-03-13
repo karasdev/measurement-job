@@ -52,8 +52,6 @@ class ProcessChunkJob implements ShouldQueue
         $startEmalloc = memory_get_usage(false);
         $maxCurrent = $startCurrent;
         $maxEmalloc = $startEmalloc;
-        $linesRead = 0;
-        $sampleEvery = 1000;
 
         $byCity = [];
         $chunkPath = $this->chunkFilePath;
@@ -65,37 +63,71 @@ class ProcessChunkJob implements ShouldQueue
             throw new \RuntimeException('Chunk file not readable: '.$chunkPath);
         }
 
-        while (($line = fgets($handle)) !== false) {
-            $line = trim($line);
-            if ($line === '') {
+        // Read in large buffers instead of line-by-line for speed
+        $leftover = '';
+        $bufferSize = 65536; // 64KB
+        $samplesCollected = 0;
+        while (! feof($handle)) {
+            $buffer = fread($handle, $bufferSize);
+            if ($buffer === false) {
+                break;
+            }
+            $buffer = $leftover.$buffer;
+            $lastNewline = strrpos($buffer, "\n");
+            if ($lastNewline === false) {
+                $leftover = $buffer;
                 continue;
             }
-            $pos = strpos($line, ';');
-            if ($pos === false) {
-                continue;
-            }
-            $city = substr($line, 0, $pos);
-            $temp = (float) substr($line, $pos + 1);
+            $leftover = substr($buffer, $lastNewline + 1);
+            $lines = substr($buffer, 0, $lastNewline);
 
-            if (! isset($byCity[$city])) {
-                $byCity[$city] = ['min' => $temp, 'max' => $temp, 'sum' => $temp, 'count' => 1];
-            } else {
-                $byCity[$city]['min'] = min($byCity[$city]['min'], $temp);
-                $byCity[$city]['max'] = max($byCity[$city]['max'], $temp);
-                $byCity[$city]['sum'] += $temp;
-                $byCity[$city]['count']++;
+            foreach (explode("\n", $lines) as $line) {
+                if ($line === '') {
+                    continue;
+                }
+                $pos = strpos($line, ';');
+                if ($pos === false) {
+                    continue;
+                }
+                $city = substr($line, 0, $pos);
+                $temp = (float) substr($line, $pos + 1);
+
+                if (! isset($byCity[$city])) {
+                    $byCity[$city] = ['min' => $temp, 'max' => $temp, 'sum' => $temp, 'count' => 1];
+                } else {
+                    $byCity[$city]['min'] = min($byCity[$city]['min'], $temp);
+                    $byCity[$city]['max'] = max($byCity[$city]['max'], $temp);
+                    $byCity[$city]['sum'] += $temp;
+                    $byCity[$city]['count']++;
+                }
             }
 
-            $linesRead++;
-            if ($linesRead === 1 || $linesRead % $sampleEvery === 0) {
+            $samplesCollected++;
+            if ($samplesCollected % 50 === 0) {
                 $maxCurrent = max($maxCurrent, memory_get_usage(true));
                 $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
             }
         }
+        // Process any remaining data
+        if ($leftover !== '') {
+            $pos = strpos($leftover, ';');
+            if ($pos !== false) {
+                $city = substr($leftover, 0, $pos);
+                $temp = (float) substr($leftover, $pos + 1);
+                if (! isset($byCity[$city])) {
+                    $byCity[$city] = ['min' => $temp, 'max' => $temp, 'sum' => $temp, 'count' => 1];
+                } else {
+                    $byCity[$city]['min'] = min($byCity[$city]['min'], $temp);
+                    $byCity[$city]['max'] = max($byCity[$city]['max'], $temp);
+                    $byCity[$city]['sum'] += $temp;
+                    $byCity[$city]['count']++;
+                }
+            }
+        }
         fclose($handle);
 
+        $now = now();
         $rows = [];
-        $cityIndex = 0;
         foreach ($byCity as $city => $data) {
             $rows[] = [
                 'measurement_job_id' => $jobId,
@@ -105,23 +137,16 @@ class ProcessChunkJob implements ShouldQueue
                 'max_temp' => $data['max'],
                 'sum_temp' => $data['sum'],
                 'count' => $data['count'],
-                'created_at' => now(),
-                'updated_at' => now(),
+                'created_at' => $now,
+                'updated_at' => $now,
             ];
-            $cityIndex++;
-            if ($cityIndex % 100 === 0) {
-                $maxCurrent = max($maxCurrent, memory_get_usage(true));
-                $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
-            }
         }
 
         $maxCurrent = max($maxCurrent, memory_get_usage(true));
         $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
 
-        foreach (array_chunk($rows, 500) as $chunk) {
+        foreach (array_chunk($rows, 1000) as $chunk) {
             ChunkTemperatureResult::insert($chunk);
-            $maxCurrent = max($maxCurrent, memory_get_usage(true));
-            $maxEmalloc = max($maxEmalloc, memory_get_usage(false));
         }
 
         $totalRows = array_sum(array_column($byCity, 'count'));
@@ -170,6 +195,7 @@ class ProcessChunkJob implements ShouldQueue
 
     /**
      * Update job progress_percent and broadcast (used when chunk was already processed on a retry).
+     * Also ensures rows_processed is correct if the previous attempt inserted rows but crashed before incrementing.
      */
     private function updateJobProgressOnly(int $jobId): void
     {
@@ -177,6 +203,40 @@ class ProcessChunkJob implements ShouldQueue
         if (! $job) {
             return;
         }
+
+        // Check if rows_processed was already incremented for this chunk by comparing
+        // the metric record. If the chunk metric exists, the increment already happened.
+        $metricExists = JobMetric::where('measurement_job_id', $jobId)
+            ->where('phase', 'chunk_'.$this->chunkIndex)
+            ->exists();
+
+        if (! $metricExists) {
+            // Previous attempt inserted ChunkTemperatureResult rows but crashed before
+            // incrementing rows_processed. Recover the count from the stored results.
+            $chunkRowCount = (int) ChunkTemperatureResult::where('measurement_job_id', $jobId)
+                ->where('chunk_index', $this->chunkIndex)
+                ->sum('count');
+
+            if ($chunkRowCount > 0) {
+                $this->measurementJob->increment('rows_processed', $chunkRowCount);
+
+                JobMetric::create([
+                    'measurement_job_id' => $jobId,
+                    'phase' => 'chunk_'.$this->chunkIndex,
+                    'execution_time_ms' => 0,
+                    'memory_used_bytes' => 0,
+                    'rows_processed' => $chunkRowCount,
+                ]);
+            }
+
+            $job = $this->measurementJob->fresh();
+        }
+
+        // Clean up chunk file if still present
+        if (file_exists($this->chunkFilePath)) {
+            File::delete($this->chunkFilePath);
+        }
+
         $done = ChunkTemperatureResult::where('measurement_job_id', $jobId)
             ->select('chunk_index')
             ->groupBy('chunk_index')

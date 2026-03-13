@@ -3,12 +3,12 @@
   "private": true,
   "description": "Start backend, queue workers, and frontend with one command",
   "scripts": {
-    "start": "concurrently -k -n server,reverb,gen1,gen2,def1,def2,frontend -c blue,cyan,magenta,magenta,yellow,yellow,green \"npm run backend:serve\" \"npm run backend:reverb\" \"npm run backend:generation\" \"npm run backend:generation\" \"npm run backend:default\" \"npm run backend:default\" \"npm run frontend\"",
+    "start": "concurrently -k -n server,reverb,gen1,gen2,def1,def2,def3,frontend -c blue,cyan,magenta,magenta,yellow,yellow,yellow,green \"npm run backend:serve\" \"npm run backend:reverb\" \"npm run backend:generation\" \"npm run backend:generation\" \"npm run backend:default\" \"npm run backend:default\" \"npm run backend:default\" \"npm run frontend\"",
     "backend:serve": "cd backend && php artisan serve",
     "backend:reverb": "cd backend && php artisan reverb:start",
     "backend:generation": "cd backend && php artisan queue:work --queue=generation",
     "backend:default": "cd backend && php artisan queue:work --queue=default",
-    "frontend": "cd frontend && npm run dev"
+    "frontend": "cd frontend && npm run build && npm run preview"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

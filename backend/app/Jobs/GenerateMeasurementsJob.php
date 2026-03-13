@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
+use App\Models\ChunkTemperatureResult;
 
 class GenerateMeasurementsJob implements ShouldQueue
 {
@@ -24,7 +25,7 @@ class GenerateMeasurementsJob implements ShouldQueue
 
     public array $backoff = [10, 30, 60];
 
-    public int $timeout = 3600;
+    public int $timeout = 7200;
 
     public function __construct(
         public MeasurementJob $measurementJob
@@ -53,7 +54,7 @@ class GenerateMeasurementsJob implements ShouldQueue
         Artisan::call('generate:measurements', [
             'path' => $dir,
             'count' => (int) $job->requested_rows,
-            'batch-size' => 500,
+            'batch-size' => 50000,
             '--job-id' => (string) $job->id,
         ]);
 
@@ -85,33 +86,38 @@ class GenerateMeasurementsJob implements ShouldQueue
         ]);
         broadcast(MeasurementJobProgress::fromJob($job->fresh()));
 
-        // Split file into chunk files (e.g. 2M lines per chunk to limit memory)
+        // Split file into chunk files using system `split` (fast, reliable C-level I/O)
         $chunkSize = 2_000_000;
-        $handle = fopen($filePath, 'r');
-        $chunkIndex = 0;
-        $lineCount = 0;
-        $chunkHandle = null;
-        $chunkPath = null;
+        $prefix = $dir.'/chunk_';
 
-        while (($line = fgets($handle)) !== false) {
-            if ($lineCount % $chunkSize === 0) {
-                if ($chunkHandle !== null) {
-                    fclose($chunkHandle);
-                }
-                $chunkPath = $dir.'/chunk_'.$chunkIndex.'.txt';
-                $chunkHandle = fopen($chunkPath, 'w');
-                $chunkIndex++;
+        // GNU split: -l = lines per file, -d = numeric suffixes, -a = suffix length
+        $cmd = sprintf(
+            'split -l %d -d -a 6 %s %s',
+            $chunkSize,
+            escapeshellarg($filePath),
+            escapeshellarg($prefix)
+        );
+        $exitCode = 0;
+        $output = [];
+        exec($cmd, $output, $exitCode);
+        if ($exitCode !== 0) {
+            throw new \RuntimeException('Failed to split measurements file: '.implode("\n", $output));
+        }
+
+        // Rename split output files (chunk_000000, chunk_000001, ...) to chunk_0.txt, chunk_1.txt, ...
+        $splitFiles = glob($prefix.'*');
+        sort($splitFiles); // ensure numeric order
+        $totalChunks = count($splitFiles);
+        for ($i = 0; $i < $totalChunks; $i++) {
+            $target = $dir.'/chunk_'.$i.'.txt';
+            if ($splitFiles[$i] !== $target) {
+                rename($splitFiles[$i], $target);
             }
-            fwrite($chunkHandle, $line);
-            $lineCount++;
         }
 
-        if ($chunkHandle !== null) {
-            fclose($chunkHandle);
+        if ($totalChunks === 0) {
+            throw new \RuntimeException('File splitting produced no chunks. File may be empty.');
         }
-        fclose($handle);
-
-        $totalChunks = $chunkIndex;
         $job->update(['total_chunks' => $totalChunks]);
         broadcast(MeasurementJobProgress::fromJob($job->fresh()));
 
@@ -123,16 +129,31 @@ class GenerateMeasurementsJob implements ShouldQueue
         Bus::batch($jobs)
             ->name('measurement-'.$job->id)
             ->onQueue('default')
-            ->then(function () use ($job) {
-                AggregateResultsJob::dispatch($job->fresh())->onQueue('default');
-            })
-            ->catch(function () use ($job) {
-                $job->update([
+            ->allowFailures()
+            ->finally(function () use ($job) {
+                $fresh = $job->fresh();
+
+                if (!$fresh || $fresh->status !== 'processing') {
+                    return;
+                }
+
+                $hasChunkResults = ChunkTemperatureResult::where(
+                    'measurement_job_id',
+                    $fresh->id
+                )->exists();
+
+                if ($hasChunkResults) {
+                    AggregateResultsJob::dispatch($fresh)->onQueue('default');
+                    return;
+                }
+
+                $fresh->update([
                     'status' => 'failed',
-                    'error_message' => 'One or more chunk jobs failed',
+                    'error_message' => 'All chunk jobs failed during processing.',
                     'completed_at' => now(),
                 ]);
-                broadcast(MeasurementJobProgress::fromJob($job->fresh()));
+
+                broadcast(MeasurementJobProgress::fromJob($fresh->fresh()));
             })
             ->dispatch();
     }
