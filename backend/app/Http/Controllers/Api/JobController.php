@@ -93,17 +93,23 @@ class JobController extends Controller
             return response()->json(['message' => 'Only failed or partial jobs can be retried.'], 422);
         }
 
-        $newJob = MeasurementJob::create([
-            'user_id' => $request->user()->id,
-            'requested_rows' => $job->requested_rows,
+        $job->update([
             'status' => 'pending',
+            'file_path' => null,
+            'progress_percent' => 0,
+            'rows_processed' => 0,
+            'execution_time_ms' => null,
+            'memory_used_bytes' => null,
+            'error_message' => null,
+            'completed_at' => null,
+            'aggregate_dispatched_at' => null,
         ]);
 
-        GenerateMeasurementsJob::dispatch($newJob);
+        GenerateMeasurementsJob::dispatch($job->fresh());
 
         return response()->json([
             'message' => 'Job submitted for retry.',
-            'job_id' => $newJob->id,
+            'job_id' => $job->id,
         ], 201);
     }
 }

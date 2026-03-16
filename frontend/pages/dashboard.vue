@@ -107,7 +107,8 @@ async function retryJob(id: number) {
     const res = await apiFetch<{ job_id: number }>('/api/jobs/' + id + '/retry', { method: 'POST' })
     jobsPage.value = 1
     await loadJobs()
-    if (res.job_id) await loadJobDetail(res.job_id)
+    // Backend now reuses the same job ID on retry; keep detail focused on the original job.
+    await loadJobDetail(id)
   } catch (e: any) {
     const msg = e?.data?.message || e?.message || 'Retry failed.'
     toast.add({ title: 'Retry failed', description: msg, color: 'error' })
