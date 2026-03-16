@@ -18,6 +18,8 @@ const cityTablePage = ref(1)
 const cityTablePerPage = 20
 const chartPage = ref(1)
 const chartPerPage = 20
+const logoutModalOpen = ref(false)
+const realtimePinnedJobIds = ref<number[]>([])
 
 function applyProgress(payload: {
   id: number
@@ -44,6 +46,9 @@ function applyProgress(payload: {
   if (selectedJob.value?.id === payload.id) {
     selectedJob.value = { ...selectedJob.value, ...payload }
     if (payload.status === 'completed' || payload.status === 'partial') loadJobDetail(payload.id)
+  }
+  if (payload.status === 'completed' || payload.status === 'partial' || payload.status === 'failed') {
+    realtimePinnedJobIds.value = realtimePinnedJobIds.value.filter((id) => id !== payload.id)
   }
 }
 
@@ -85,6 +90,16 @@ async function loadJobs() {
     params.set('per_page', String(jobsPerPage))
     const res = await apiFetch<{ data: Job[]; current_page: number; last_page: number; total: number; per_page: number; from: number | null; to: number | null }>('/api/jobs?' + params.toString())
     jobs.value = res
+    if (res?.data?.length) {
+      const terminalIds = new Set(
+        res.data
+          .filter((j) => j.status === 'completed' || j.status === 'partial' || j.status === 'failed')
+          .map((j) => j.id)
+      )
+      if (terminalIds.size) {
+        realtimePinnedJobIds.value = realtimePinnedJobIds.value.filter((id) => !terminalIds.has(id))
+      }
+    }
   } catch {
     jobs.value = null
   }
@@ -160,6 +175,11 @@ async function submitJob() {
       method: 'POST',
       body: { rows: num },
     })
+    if (res?.job_id) {
+      const ids = new Set(realtimePinnedJobIds.value)
+      ids.add(res.job_id)
+      realtimePinnedJobIds.value = [...ids]
+    }
     jobsPage.value = 1
     await loadJobs()
     // Don't open job detail automatically while job is generating
@@ -288,12 +308,13 @@ function setChartPage(p: number) {
 
 const SMOOTH_TICK_MS = 120
 const SMOOTH_STEP = 4
+const RESYNC_THROTTLE_MS = 1000
 const IN_PROGRESS_STATUSES = ['generating', 'processing', 'aggregating']
 
 let unsubscribeProgress: (() => void) | null = null
 let smoothTimer: ReturnType<typeof setInterval> | null = null
-let pollTimer: ReturnType<typeof setInterval> | null = null
-const POLL_INTERVAL_MS = 1500
+let syncInFlight = false
+let lastSyncAt = 0
 
 const smoothedProgressPercent = ref(0)
 
@@ -325,25 +346,23 @@ function stopSmoothProgress() {
   }
 }
 
-function startPollingJobDetail() {
-  if (pollTimer) return
-  pollTimer = setInterval(() => {
-    const job = selectedJob.value
-    if (!job?.id || !IN_PROGRESS_STATUSES.includes(job.status)) {
-      if (pollTimer) {
-        clearInterval(pollTimer)
-        pollTimer = null
-      }
-      return
-    }
-    loadJobDetail(job.id)
-  }, POLL_INTERVAL_MS)
-}
+async function syncJobsFromServer() {
+  if (syncInFlight) return
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
 
-function stopPollingJobDetail() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
+  const now = Date.now()
+  if (now - lastSyncAt < RESYNC_THROTTLE_MS) return
+  lastSyncAt = now
+
+  syncInFlight = true
+  try {
+    await loadJobs()
+    const job = selectedJob.value
+    if (job?.id && IN_PROGRESS_STATUSES.includes(job.status)) {
+      await loadJobDetail(job.id)
+    }
+  } finally {
+    syncInFlight = false
   }
 }
 
@@ -356,11 +375,9 @@ watch(
   () => ({ id: selectedJob.value?.id, status: selectedJob.value?.status }),
   ({ id, status }) => {
     stopSmoothProgress()
-    stopPollingJobDetail()
     if (id != null && status != null && IN_PROGRESS_STATUSES.includes(status)) {
       smoothedProgressPercent.value = displayProgress(selectedJob.value!)
-      if (status === 'processing') startSmoothProgress()
-      startPollingJobDetail()
+      startSmoothProgress()
     } else if (selectedJob.value) {
       smoothedProgressPercent.value = displayProgress(selectedJob.value)
     } else {
@@ -371,14 +388,20 @@ watch(
 )
 
 watch(
-  () => jobs.value?.data?.map((j) => j.id) ?? [],
-  (ids) => {
+  () => {
+    const ids = new Set<number>(jobs.value?.data?.map((j) => j.id) ?? [])
+    if (selectedJob.value?.id) ids.add(selectedJob.value.id)
+    for (const id of realtimePinnedJobIds.value) ids.add(id)
+    return [...ids].sort((a, b) => a - b).join(',')
+  },
+  (idStr) => {
     if (unsubscribeProgress) {
       unsubscribeProgress()
       unsubscribeProgress = null
     }
+    const ids = idStr ? idStr.split(',').map(Number) : []
     if (ids.length) {
-      unsubscribeProgress = useJobProgress(ids, applyProgress)
+      unsubscribeProgress = useJobProgress(ids, applyProgress, syncJobsFromServer)
     }
   },
   { immediate: true }
@@ -404,13 +427,20 @@ onUnmounted(() => {
     document.removeEventListener('visibilitychange', onPageVisible)
   }
   stopSmoothProgress()
-  stopPollingJobDetail()
   if (unsubscribeProgress) unsubscribeProgress()
 })
 
-function logout() {
-  token.value = null
-  navigateTo('/login')
+async function logout() {
+  logoutModalOpen.value = false
+
+  try {
+    await apiFetch('/api/logout', { method: 'POST' })
+  } catch {
+    // Continue local logout even if token is already invalid server-side.
+  } finally {
+    token.value = null
+    await navigateTo('/login')
+  }
 }
 </script>
 
@@ -420,11 +450,36 @@ function logout() {
       <NuxtLink v-if="user?.is_admin" to="/admin">
         <UButton color="neutral" variant="link" size="sm">Admin</UButton>
       </NuxtLink>
-      <span v-if="user" class="text-sm text-gray-600">{{ user.email }}</span>
-      <UButton color="neutral" variant="link" size="sm" @click="logout">
+      <span v-if="user" class="text-sm font-semibold text-gray-800 dark:text-gray-100">{{ user.name }}</span>
+      <UButton
+        color="error"
+        variant="solid"
+        size="sm"
+        icon="i-lucide-log-out"
+        class="font-semibold shadow-sm"
+        @click="logoutModalOpen = true"
+      >
         Logout
       </UButton>
     </template>
+
+    <UModal
+      v-model:open="logoutModalOpen"
+      title="Confirm logout"
+      description="Are you sure you want to logout?"
+    >
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton color="neutral" variant="soft" @click="logoutModalOpen = false">
+            Cancel
+          </UButton>
+          <UButton color="error" variant="solid" icon="i-lucide-log-out" @click="logout">
+            Logout
+          </UButton>
+        </div>
+      </template>
+    </UModal>
+
     <div class="space-y-8">
       <!-- Submit job form -->
       <UCard title="New job" description="Generate a measurements file and compute min/max/avg temperature per city. Local: min 10,000 rows. Production: 100M–1B.">

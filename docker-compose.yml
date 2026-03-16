@@ -1,0 +1,141 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: measurement_db
+      MYSQL_USER: laravel
+      MYSQL_PASSWORD: laravel
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  backend-init:
+    build:
+      context: ./backend
+    restart: "no"
+    environment: &backend-env
+      APP_NAME: Laravel
+      APP_ENV: local
+      APP_KEY: base64:HTN5z53Urx+aA8MwrNG5sSBfg7vHR9I+huymo7axJaA=
+      APP_DEBUG: "true"
+      APP_URL: http://127.0.0.1:${BACKEND_PORT:-8000}
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_DATABASE: measurement_db
+      DB_USERNAME: laravel
+      DB_PASSWORD: laravel
+      SESSION_DRIVER: database
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
+      BROADCAST_CONNECTION: reverb
+      REVERB_APP_ID: my-app-id
+      REVERB_APP_KEY: my-app-key
+      REVERB_APP_SECRET: my-app-secret
+      REVERB_HOST: reverb
+      REVERB_PORT: "8080"
+      REVERB_SCHEME: http
+      REVERB_SERVER_HOST: 0.0.0.0
+      REVERB_SERVER_PORT: "8080"
+      FILAMENT_ADMIN_NAME: Admin
+      FILAMENT_ADMIN_EMAIL: admin@example.com
+      FILAMENT_ADMIN_PASSWORD: password
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - backend_storage:/var/www/html/storage
+    command: ["sh", "/usr/local/bin/init.sh"]
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      backend-init:
+        condition: service_completed_successfully
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - backend_storage:/var/www/html/storage
+    command: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+
+  reverb:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      backend-init:
+        condition: service_completed_successfully
+    ports:
+      - "${REVERB_PORT:-8080}:8080"
+    volumes:
+      - backend_storage:/var/www/html/storage
+    command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
+
+  queue-default:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      backend-init:
+        condition: service_completed_successfully
+    volumes:
+      - backend_storage:/var/www/html/storage
+    command: ["php", "artisan", "queue:work", "--queue=default", "--tries=3", "--sleep=1", "--timeout=600"]
+
+  queue-default-2:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      backend-init:
+        condition: service_completed_successfully
+    volumes:
+      - backend_storage:/var/www/html/storage
+    command: ["php", "artisan", "queue:work", "--queue=default", "--tries=3", "--sleep=1", "--timeout=600"]
+
+  queue-generation:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      backend-init:
+        condition: service_completed_successfully
+    volumes:
+      - backend_storage:/var/www/html/storage
+    command: ["php", "artisan", "queue:work", "--queue=generation", "--tries=3", "--sleep=1", "--timeout=3600"]
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+      reverb:
+        condition: service_started
+    environment:
+      NUXT_PUBLIC_API_BASE: http://127.0.0.1:${BACKEND_PORT:-8000}
+      NUXT_PUBLIC_REVERB_APP_KEY: my-app-key
+      NUXT_PUBLIC_REVERB_HOST: 127.0.0.1
+      NUXT_PUBLIC_REVERB_PORT: ${REVERB_PORT:-8080}
+      NUXT_PUBLIC_REVERB_SCHEME: http
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+volumes:
+  mysql_data:
+  backend_storage:

@@ -55,14 +55,18 @@ If neither Reverb nor Pusher is configured, the app still works; progress is sho
 
 ### Filament admin panel
 
-A **Filament v5** admin panel is available at **/admin** (e.g. `http://127.0.0.1:8000/admin`). See **[FILAMENT_SETUP.md](./FILAMENT_SETUP.md)** for PHP extensions (`intl`, `zip`), installation, and creating a Filament user. The app also has a custom Admin page in the Nuxt frontend for users with `is_admin`.
+A **Filament v5** admin panel is available at **/admin** (e.g. `http://127.0.0.1:8000/admin`). The app also has a custom Admin page in the Nuxt frontend for users with `is_admin`.
 
 ### Admin dashboard (frontend)
 
-To grant a user admin access (so they can open the frontend Admin page and see stats, all jobs, and users), run:
+Admin access is seeded from environment variables in `backend/.env`:
+
+`FILAMENT_ADMIN_NAME`, `FILAMENT_ADMIN_EMAIL`, `FILAMENT_ADMIN_PASSWORD`
+
+Then run:
 
 ```bash
-php artisan user:admin your@email.com
+php artisan db:seed --class=FilamentAdminUserSeeder
 ```
 
 ---

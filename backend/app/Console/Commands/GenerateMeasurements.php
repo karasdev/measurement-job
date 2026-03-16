@@ -452,11 +452,22 @@ class GenerateMeasurements extends Command
         $startEmalloc = memory_get_usage(false);
         $maxCurrent = $startCurrent;
         $maxEmalloc = $startEmalloc;
-        $sampleEvery = 10000;
+        $sampleEvery = 500000;
         $jobId = $this->option('job-id');
 
         $fileHandle = fopen($filePath, 'w');
         $buffer = "";
+
+        // Pre-extract station data into flat arrays for faster access
+        $stationNames = [];
+        $stationMeans = [];
+        foreach ($this->stations as $s) {
+            $stationNames[] = $s[0];
+            $stationMeans[] = $s[1];
+        }
+        $stationCount = count($stationNames);
+        $stdDev = 10.0;
+        $twoPi = 2.0 * M_PI;
 
         for ($i = 0; $i < $count; $i++) {
             if ($i > 0 && $i % 500000 == 0) {
@@ -464,10 +475,12 @@ class GenerateMeasurements extends Command
                 $this->info("Generated $i records in $elapsed seconds...");
             }
 
-            $station = $this->stations[array_rand($this->stations)];
-            $temperature = $this->generateTemperature($station[1]);
+            $idx = mt_rand(0, $stationCount - 1);
+            $u = mt_rand(1, mt_getrandmax()) / mt_getrandmax();
+            $v = mt_rand() / mt_getrandmax();
+            $temp = round($stationMeans[$idx] + $stdDev * sqrt(-2.0 * log($u)) * cos($twoPi * $v), 1);
 
-            $buffer .= "{$station[0]};$temperature\n";
+            $buffer .= $stationNames[$idx] . ';' . $temp . "\n";
 
             if ($i === 1 || ($i > 0 && $i % $sampleEvery === 0)) {
                 $maxCurrent = max($maxCurrent, memory_get_usage(true));
@@ -475,13 +488,13 @@ class GenerateMeasurements extends Command
             }
 
             if ($i > 0 && $i % $bufferSize == 0){
-                fwrite($fileHandle, $buffer);
+                $this->safeWrite($fileHandle, $buffer);
                 $buffer = "";
             }
         }
 
         if ($buffer) {
-            fwrite($fileHandle, $buffer);
+            $this->safeWrite($fileHandle, $buffer);
         }
 
         fclose($fileHandle);
@@ -506,6 +519,23 @@ class GenerateMeasurements extends Command
         $stdDev = 10.0;
         $random = $mean + $stdDev * $this->randomGaussian();
         return round($random, 1);
+    }
+
+    /**
+     * Write all bytes to file handle, retrying on partial writes.
+     */
+    private function safeWrite($handle, string $data): void
+    {
+        $remaining = strlen($data);
+        $offset = 0;
+        while ($remaining > 0) {
+            $written = fwrite($handle, $offset === 0 ? $data : substr($data, $offset));
+            if ($written === false) {
+                throw new \RuntimeException('fwrite() failed during measurement generation');
+            }
+            $offset += $written;
+            $remaining -= $written;
+        }
     }
 
     private function randomGaussian(): float

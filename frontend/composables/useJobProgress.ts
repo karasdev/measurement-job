@@ -70,28 +70,48 @@ function getBroadcastClient(): Pusher | null {
  */
 export function useJobProgress(
   jobIds: number[],
-  onProgress: (payload: JobProgressPayload) => void
+  onProgress: (payload: JobProgressPayload) => void,
+  onSync?: () => void
 ): () => void {
   const client = getBroadcastClient()
-  const channels: { id: number; channelName: string; channel: ReturnType<Pusher['subscribe']> }[] = []
+  const channels: {
+    id: number
+    channelName: string
+    channel: ReturnType<Pusher['subscribe']>
+    onProgressEvent: (data: JobProgressPayload) => void
+    onSubscribed: () => void
+  }[] = []
 
   if (!client || !jobIds.length) {
     return () => {}
   }
 
+  const onConnected = () => {
+    if (onSync) onSync()
+  }
+  client.connection.bind('connected', onConnected)
+
   for (const id of jobIds) {
     const channelName = `private-measurement_job.${id}`
     const channel = client.subscribe(channelName)
-    channel.bind('progress', (data: JobProgressPayload) => {
+    const onProgressEvent = (data: JobProgressPayload) => {
       if (data && typeof data.id === 'number') onProgress(data)
-    })
-    channels.push({ id, channelName, channel })
+    }
+    const onSubscribed = () => {
+      if (onSync) onSync()
+    }
+    channel.bind('progress', onProgressEvent)
+    channel.bind('pusher:subscription_succeeded', onSubscribed)
+    channels.push({ id, channelName, channel, onProgressEvent, onSubscribed })
   }
 
   return () => {
-    for (const { channelName, channel } of channels) {
-      channel.unbind('progress')
+    for (const { channelName, channel, onProgressEvent, onSubscribed } of channels) {
+      channel.unbind('progress', onProgressEvent)
+      channel.unbind('pusher:subscription_succeeded', onSubscribed)
       client!.unsubscribe(channelName)
     }
+    client.connection.unbind('connected', onConnected)
+    client.disconnect()
   }
 }
