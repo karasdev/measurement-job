@@ -46,6 +46,26 @@ The application UI is organized around four main areas:
 
 ---
 
+## Screenshots
+
+### Dashboard Overview
+
+![Dashboard overview showing pipeline summary cards and the submit job form.](docs/screenshots/dashboard-overview.png)
+
+### Jobs Table
+
+![Jobs table with filtering, sorting, progress, runtime, memory usage, and creation date.](docs/screenshots/jobs-table.png)
+
+### Job Detail and Temperature Chart
+
+![Job detail view showing status cards and a temperature chart by city.](docs/screenshots/job-detail-chart.png)
+
+### City Results Table
+
+![Paginated city results table with min, max, average temperature, and count columns.](docs/screenshots/city-results-table.png)
+
+---
+
 ## Usage
 
 1. Open **http://localhost:3000**.
