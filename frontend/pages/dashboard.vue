@@ -18,6 +18,7 @@ const cityTablePage = ref(1)
 const cityTablePerPage = 20
 const chartPage = ref(1)
 const chartPerPage = 20
+const IN_PROGRESS_STATUSES = ['generating', 'processing', 'aggregating']
 
 function applyProgress(payload: {
   id: number
@@ -258,6 +259,36 @@ function formatKbytes(bytes: number | null) {
   return kb.toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' KB'
 }
 
+function formatSeconds(ms: number | null) {
+  if (ms == null) return '—'
+  return `${(ms / 1000).toFixed(2)} s`
+}
+
+function formatDate(value: string | null) {
+  if (!value) return '—'
+  return new Date(value).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+const jobSummary = computed(() => {
+  const list = jobs.value?.data ?? []
+  const active = list.filter((job) => IN_PROGRESS_STATUSES.includes(job.status)).length
+  const completed = list.filter((job) => job.status === 'completed').length
+  const failed = list.filter((job) => job.status === 'failed' || job.status === 'partial').length
+  const processed = list.reduce((sum, job) => sum + (job.rows_processed ?? 0), 0)
+  const totalRows = list.reduce((sum, job) => sum + (job.requested_rows ?? 0), 0)
+  const averageProgress = list.length
+    ? Math.round(list.reduce((sum, job) => sum + displayProgress(job), 0) / list.length)
+    : 0
+
+  return { active, completed, failed, processed, totalRows, averageProgress }
+})
+
 const paginatedCityResults = computed(() => {
   const list = selectedJob.value?.temperature_results ?? []
   const total = list.length
@@ -288,7 +319,6 @@ function setChartPage(p: number) {
 
 const SMOOTH_TICK_MS = 120
 const SMOOTH_STEP = 4
-const IN_PROGRESS_STATUSES = ['generating', 'processing', 'aggregating']
 
 let unsubscribeProgress: (() => void) | null = null
 let smoothTimer: ReturnType<typeof setInterval> | null = null
@@ -418,28 +448,58 @@ function logout() {
   <AppPageLayout title="Dashboard">
     <template #headerActions>
       <NuxtLink v-if="user?.is_admin" to="/admin">
-        <UButton color="neutral" variant="link" size="sm">Admin</UButton>
+        <UButton color="neutral" variant="ghost" size="sm">Admin</UButton>
       </NuxtLink>
-      <span v-if="user" class="text-sm text-gray-600">{{ user.email }}</span>
-      <UButton color="neutral" variant="link" size="sm" @click="logout">
+      <span v-if="user" class="hidden sm:inline text-sm text-gray-500 dark:text-gray-400">{{ user.email }}</span>
+      <UButton color="neutral" variant="ghost" size="sm" @click="logout">
         Logout
       </UButton>
     </template>
-    <div class="space-y-8">
-      <!-- Submit job form -->
-      <UCard title="New job" description="Generate a measurements file and compute min/max/avg temperature per city. Local: min 10,000 rows. Production: 100M–1B.">
-        <form class="flex flex-wrap items-end gap-4" novalidate @submit.prevent="submitJob">
-          <div class="flex flex-col gap-1.5 w-48">
-            <label for="rows" class="text-sm font-medium">Number of rows</label>
+    <div class="space-y-6">
+      <section class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-950">
+        <div class="flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Measurement pipeline</p>
+            <h2 class="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">Process city temperature workloads</h2>
+            <p class="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-400">
+              Generate rows, process chunks on queues, and review per-city min, max, and average temperatures with live progress.
+            </p>
+          </div>
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[520px]">
+            <div class="rounded-md border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/70">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Active</p>
+              <p class="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{{ jobSummary.active }}</p>
+            </div>
+            <div class="rounded-md border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/70">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Completed</p>
+              <p class="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{{ jobSummary.completed }}</p>
+            </div>
+            <div class="rounded-md border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/70">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Processed</p>
+              <p class="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{{ jobSummary.processed.toLocaleString() }}</p>
+            </div>
+            <div class="rounded-md border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/70">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Avg Progress</p>
+              <p class="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{{ jobSummary.averageProgress }}%</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <UCard title="New job" description="Create a queued measurement workload. The minimum local run is 10,000 rows.">
+        <form class="grid gap-4 sm:grid-cols-[minmax(220px,320px)_auto] sm:items-end" novalidate @submit.prevent="submitJob">
+          <div class="flex flex-col gap-1.5">
+            <label for="rows" class="text-sm font-medium text-gray-700 dark:text-gray-200">Number of rows</label>
             <UInput
               id="rows"
               v-model="rows"
               type="number"
-              placeholder="e.g. 50000"
+              placeholder="50000"
+              size="lg"
             />
           </div>
-          <UButton type="submit" :loading="submitting" :disabled="submitting">
-            {{ submitting ? 'Submitting…' : 'Submit job' }}
+          <UButton type="submit" size="lg" :loading="submitting" :disabled="submitting" class="justify-center sm:w-32">
+            {{ submitting ? 'Submitting' : 'Submit job' }}
           </UButton>
         </form>
       </UCard>
@@ -448,7 +508,10 @@ function logout() {
       <UCard>
         <template #header>
           <div class="flex flex-wrap items-center justify-between gap-4">
-            <h2 class="text-lg font-medium">Your jobs</h2>
+            <div>
+              <h2 class="text-lg font-semibold text-gray-950 dark:text-white">Jobs</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ jobs?.total ?? 0 }} total jobs tracked for this account.</p>
+            </div>
             <div class="flex flex-wrap items-center gap-3">
               <USelect
                 v-model="statusFilter"
@@ -477,56 +540,58 @@ function logout() {
                 @update:model-value="onJobsFilterOrSortChange"
               />
               <UButton color="neutral" variant="soft" size="sm" @click="sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'; onJobsFilterOrSortChange()">
-                {{ sortOrder === 'desc' ? '↓ Desc' : '↑ Asc' }}
+                {{ sortOrder === 'desc' ? 'Desc' : 'Asc' }}
               </UButton>
             </div>
           </div>
         </template>
-        <div v-if="!jobs" class="py-8 text-center text-muted">Loading…</div>
+        <div v-if="!jobs" class="py-10 text-center text-sm text-gray-500 dark:text-gray-400">Loading jobs...</div>
         <div v-else-if="!jobs.data?.length" class="py-8 text-center text-muted">No jobs yet. Submit one above.</div>
         <div v-else class="overflow-x-auto">
-          <table class="w-full text-sm">
+          <table class="min-w-[980px] w-full text-sm">
             <thead>
-              <tr class="border-b border-border text-muted text-left">
-                <th class="px-4 py-2 font-medium w-20 text-center">#</th>
-                <th class="px-4 py-2 font-medium text-center">Rows</th>
-                <!-- <th class="px-4 py-2 font-medium text-center">Status</th> -->
-                <th class="px-4 py-2 font-medium text-center">Phase</th>
-                <th class="px-4 py-2 font-medium w-28 text-center">Progress bar</th>
-                <!-- <th class="px-4 py-2 font-medium text-center">Execution time</th>
-                <th class="px-4 py-2 font-medium text-center">Memory</th> -->
-                <th class="px-4 py-2 font-medium text-center">Progress</th>
-                <th class="px-4 py-2 font-medium text-center">Date</th>
+              <tr class="border-b border-gray-200 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-800 dark:text-gray-400">
+                <th class="px-4 py-3">Job</th>
+                <th class="px-4 py-3 text-right">Rows</th>
+                <th class="px-4 py-3">Status</th>
+                <th class="px-4 py-3">Phase</th>
+                <th class="px-4 py-3 min-w-52">Progress</th>
+                <th class="px-4 py-3 text-right">Runtime</th>
+                <th class="px-4 py-3 text-right">Memory</th>
+                <th class="px-4 py-3 text-right">Created</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
               <tr
                 v-for="job in jobs.data"
                 :key="job.id"
-                class="border-b border-border hover:bg-muted/50 cursor-pointer"
+                class="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-900/70"
                 @click="loadJobDetail(job.id)"
               >
-                <td class="px-4 py-3 font-mono text-muted text-center">#{{ job.id }}</td>
-                <td class="px-4 py-3 text-center">{{ job.requested_rows.toLocaleString() }}</td>
-                <!-- <td class="px-4 py-3 text-center">
+                <td class="px-4 py-4">
+                  <div class="font-mono font-medium text-gray-950 dark:text-white">#{{ job.id }}</div>
+                  <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ job.completed_at ? 'Completed ' + formatDate(job.completed_at) : 'Open details' }}</div>
+                </td>
+                <td class="px-4 py-4 text-right font-medium text-gray-950 dark:text-white">{{ job.requested_rows.toLocaleString() }}</td>
+                <td class="px-4 py-4">
                   <UBadge :color="statusBadgeColor(job.status)" variant="subtle" size="xs">{{ statusLabel(job.status) }}</UBadge>
-                </td> -->
-                <td class="px-4 py-3 text-center">{{ phaseLabel(job.status) }}</td>
-                <td class="px-4 py-3 w-28 text-center">
-                  <UProgress
-                    :model-value="displayProgress(job)"
-                    :max="100"
-                    size="xs"
-                    :color="job.status === 'completed' ? 'success' : job.status === 'partial' ? 'neutral' : 'primary'"
-                  />
                 </td>
-                <!-- <td class="px-4 py-3 text-center">{{ job.execution_time_ms != null ? (job.execution_time_ms / 1000).toFixed(2) + ' s' : '—' }}</td>
-                <td class="px-4 py-3 text-center">{{ formatKbytes(job.memory_processing_bytes ?? null) }}</td> -->
-                <td class="px-4 py-3 text-center">
-                  <span v-if="job.status !== 'pending'">{{ displayProgress(job) }}% · {{ job.rows_processed.toLocaleString() }} processed</span>
-                  <span v-else class="text-muted">—</span>
+                <td class="px-4 py-4 text-gray-700 dark:text-gray-300">{{ phaseLabel(job.status) }}</td>
+                <td class="px-4 py-4">
+                  <div class="flex items-center justify-between gap-3">
+                    <UProgress
+                      :model-value="displayProgress(job)"
+                      :max="100"
+                      size="sm"
+                      :color="job.status === 'completed' ? 'success' : job.status === 'partial' ? 'neutral' : job.status === 'failed' ? 'error' : 'primary'"
+                    />
+                    <span class="w-12 text-right font-medium text-gray-950 dark:text-white">{{ displayProgress(job) }}%</span>
+                  </div>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ job.rows_processed.toLocaleString() }} processed</p>
                 </td>
-                <td class="px-4 py-3 text-right text-muted text-center">{{ new Date(job.created_at).toLocaleString() }}</td>
+                <td class="px-4 py-4 text-right text-gray-700 dark:text-gray-300">{{ formatSeconds(job.execution_time_ms) }}</td>
+                <td class="px-4 py-4 text-right text-gray-700 dark:text-gray-300">{{ formatKbytes(job.memory_processing_bytes ?? job.memory_used_bytes) }}</td>
+                <td class="px-4 py-4 text-right text-gray-500 dark:text-gray-400">{{ formatDate(job.created_at) }}</td>
               </tr>
             </tbody>
           </table>
@@ -573,7 +638,10 @@ function logout() {
       <UCard v-if="selectedJob">
         <template #header>
           <div class="flex justify-between items-center flex-wrap gap-2">
-            <h2 class="text-lg font-medium">Job #{{ selectedJob.id }}</h2>
+            <div>
+              <h2 class="text-lg font-semibold text-gray-950 dark:text-white">Job #{{ selectedJob.id }}</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ selectedJob.requested_rows.toLocaleString() }} requested rows</p>
+            </div>
             <div class="flex items-center gap-2">
               <UButton
                 v-if="selectedJob.status === 'failed' || selectedJob.status === 'partial'"
@@ -583,48 +651,56 @@ function logout() {
                 :disabled="retrying"
                 @click="retryJob(selectedJob.id)"
               >
-                {{ retrying ? 'Retrying…' : 'Retry job' }}
+                {{ retrying ? 'Retrying' : 'Retry job' }}
               </UButton>
               <UButton color="neutral" variant="ghost" size="sm" @click="selectedJob = null">Close</UButton>
             </div>
           </div>
         </template>
-        <div class="space-y-4">
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-            <div>
-              <span class="text-muted">Status</span>
-              <p class="font-medium">
-                <UBadge :color="statusBadgeColor(selectedJob.status)" variant="subtle" size="xs">{{ statusLabel(selectedJob.status) }}</UBadge>
-              </p>
+        <div class="space-y-6">
+          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div class="rounded-md border border-gray-200 p-4 dark:border-gray-800">
+              <p class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Status</p>
+              <p class="mt-2"><UBadge :color="statusBadgeColor(selectedJob.status)" variant="subtle" size="xs">{{ statusLabel(selectedJob.status) }}</UBadge></p>
             </div>
-            <div>
-              <span class="text-muted">Progress</span>
-              <p class="font-medium">{{ displayProgress(selectedJob) }}%</p>
+            <div class="rounded-md border border-gray-200 p-4 dark:border-gray-800">
+              <p class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Progress</p>
+              <p class="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{{ displayProgress(selectedJob) }}%</p>
             </div>
-            <div>
-              <span class="text-muted">Execution time</span>
-              <p class="font-medium">{{ selectedJob.execution_time_ms != null ? (selectedJob.execution_time_ms / 1000).toFixed(2) + ' s' : '—' }}</p>
+            <div class="rounded-md border border-gray-200 p-4 dark:border-gray-800">
+              <p class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Runtime</p>
+              <p class="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{{ formatSeconds(selectedJob.execution_time_ms) }}</p>
             </div>
-            <div>
-              <span class="text-muted">Memory</span>
-              <p class="font-medium">{{ formatKbytes(selectedJob.memory_processing_bytes) }}</p>
+            <div class="rounded-md border border-gray-200 p-4 dark:border-gray-800">
+              <p class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Memory</p>
+              <p class="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{{ formatKbytes(selectedJob.memory_processing_bytes ?? selectedJob.memory_used_bytes) }}</p>
+            </div>
+            <div class="rounded-md border border-gray-200 p-4 dark:border-gray-800">
+              <p class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Cities</p>
+              <p class="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{{ selectedJob.temperature_results?.length?.toLocaleString() ?? '—' }}</p>
             </div>
           </div>
-          <p v-if="selectedJob.error_message" class="text-error text-sm">{{ selectedJob.error_message }}</p>
-          <div v-if="selectedJob.temperature_results?.length" class="space-y-4">
-            <div class="border rounded-lg overflow-hidden">
-              <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 px-4 pt-3 pb-2 bg-muted/30">Temperature by city (chart)</h3>
+          <p v-if="selectedJob.error_message" class="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">{{ selectedJob.error_message }}</p>
+          <div v-if="selectedJob.temperature_results?.length" class="space-y-6">
+            <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-800">
+                <div>
+                  <h3 class="text-sm font-semibold text-gray-950 dark:text-white">Temperature by city</h3>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Min, average, and max temperatures for the current city page.</p>
+                </div>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ chartPaginatedResults.total.toLocaleString() }} cities</span>
+              </div>
               <ClientOnly>
-                <div class="px-4 pb-2">
+                <div class="p-4">
                   <JobTemperatureChart :results="chartPaginatedResults.rows" />
                 </div>
                 <template #fallback>
-                  <p class="text-sm text-gray-500 px-4 pb-2">Loading chart…</p>
+                  <p class="p-4 text-sm text-gray-500 dark:text-gray-400">Loading chart...</p>
                 </template>
               </ClientOnly>
-              <div v-if="chartPaginatedResults.total > chartPerPage" class="px-4 py-3 border-t flex flex-wrap items-center justify-between gap-2 bg-muted/30">
-                <p class="text-sm text-muted">
-                  Showing {{ chartPaginatedResults.start }}–{{ chartPaginatedResults.end }} of {{ chartPaginatedResults.total }} cities
+              <div v-if="chartPaginatedResults.total > chartPerPage" class="px-4 py-3 border-t border-gray-200 flex flex-wrap items-center justify-between gap-2 dark:border-gray-800">
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Showing {{ chartPaginatedResults.start }}-{{ chartPaginatedResults.end }} of {{ chartPaginatedResults.total }} cities
                 </p>
                 <div class="flex items-center gap-2">
                   <UButton
@@ -636,7 +712,7 @@ function logout() {
                   >
                     Previous
                   </UButton>
-                  <span class="text-sm text-muted">
+                  <span class="text-sm text-gray-500 dark:text-gray-400">
                     Page {{ chartPaginatedResults.page }} of {{ chartPaginatedResults.totalPages }}
                   </span>
                   <UButton
@@ -651,30 +727,36 @@ function logout() {
                 </div>
               </div>
             </div>
-            <div class="border rounded-lg overflow-x-auto">
-              <table class="min-w-full divide-y divide-border">
-                <thead class="bg-muted/30">
-                  <tr>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-muted uppercase">City</th>
-                    <th class="px-4 py-2 text-right text-xs font-medium text-muted uppercase">Min</th>
-                    <th class="px-4 py-2 text-right text-xs font-medium text-muted uppercase">Max</th>
-                    <th class="px-4 py-2 text-right text-xs font-medium text-muted uppercase">Avg</th>
-                    <th class="px-4 py-2 text-right text-xs font-medium text-muted uppercase">Count</th>
+            <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
+              <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-800">
+                <h3 class="text-sm font-semibold text-gray-950 dark:text-white">City results</h3>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Aggregated readings per city.</p>
+              </div>
+              <div class="overflow-x-auto">
+              <table class="min-w-full text-sm">
+                <thead class="bg-gray-50 dark:bg-gray-900/70">
+                  <tr class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                    <th class="px-4 py-3 text-left">City</th>
+                    <th class="px-4 py-3 text-right">Min</th>
+                    <th class="px-4 py-3 text-right">Max</th>
+                    <th class="px-4 py-3 text-right">Avg</th>
+                    <th class="px-4 py-3 text-right">Count</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-border">
-                  <tr v-for="r in paginatedCityResults.rows" :key="r.city">
-                    <td class="px-4 py-2 text-sm">{{ r.city }}</td>
-                    <td class="px-4 py-2 text-sm text-right">{{ r.min_temp }}</td>
-                    <td class="px-4 py-2 text-sm text-right">{{ r.max_temp }}</td>
-                    <td class="px-4 py-2 text-sm text-right">{{ r.avg_temp }}</td>
-                    <td class="px-4 py-2 text-sm text-right">{{ r.count.toLocaleString() }}</td>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                  <tr v-for="r in paginatedCityResults.rows" :key="r.city" class="hover:bg-gray-50 dark:hover:bg-gray-900/70">
+                    <td class="px-4 py-3 font-medium text-gray-950 dark:text-white">{{ r.city }}</td>
+                    <td class="px-4 py-3 text-sm text-right tabular-nums">{{ r.min_temp }}</td>
+                    <td class="px-4 py-3 text-sm text-right tabular-nums">{{ r.max_temp }}</td>
+                    <td class="px-4 py-3 text-sm text-right tabular-nums">{{ r.avg_temp }}</td>
+                    <td class="px-4 py-3 text-sm text-right tabular-nums">{{ r.count.toLocaleString() }}</td>
                   </tr>
                 </tbody>
               </table>
-              <div v-if="paginatedCityResults.total > cityTablePerPage" class="px-4 py-3 border-t flex flex-wrap items-center justify-between gap-2 bg-muted/30">
-                <p class="text-sm text-muted">
-                  Showing {{ paginatedCityResults.start }}–{{ paginatedCityResults.end }} of {{ paginatedCityResults.total }} cities
+              </div>
+              <div v-if="paginatedCityResults.total > cityTablePerPage" class="px-4 py-3 border-t border-gray-200 flex flex-wrap items-center justify-between gap-2 dark:border-gray-800">
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Showing {{ paginatedCityResults.start }}-{{ paginatedCityResults.end }} of {{ paginatedCityResults.total }} cities
                 </p>
                 <div class="flex items-center gap-2">
                   <UButton
@@ -686,7 +768,7 @@ function logout() {
                   >
                     Previous
                   </UButton>
-                  <span class="text-sm text-muted">
+                  <span class="text-sm text-gray-500 dark:text-gray-400">
                     Page {{ paginatedCityResults.page }} of {{ paginatedCityResults.totalPages }}
                   </span>
                   <UButton

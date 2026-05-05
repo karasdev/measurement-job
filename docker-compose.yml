@@ -1,0 +1,131 @@
+x-backend-environment: &backend-environment
+  APP_NAME: "Measurements Dashboard"
+  APP_ENV: local
+  APP_KEY: "base64:DJOsR1KD9gLLI9LM9644uIxUVkpeSE/jKQdC0/zU4Ac="
+  APP_DEBUG: "true"
+  APP_URL: http://localhost:8000
+  LOG_CHANNEL: stack
+  LOG_LEVEL: debug
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_DATABASE: measurements
+  DB_USERNAME: measurements
+  DB_PASSWORD: secret
+  SESSION_DRIVER: database
+  CACHE_STORE: database
+  QUEUE_CONNECTION: database
+  BROADCAST_CONNECTION: reverb
+  REVERB_APP_ID: measurements
+  REVERB_APP_KEY: measurements-local-key
+  REVERB_APP_SECRET: measurements-local-secret
+  REVERB_HOST: localhost
+  REVERB_BROADCAST_HOST: reverb
+  REVERB_PORT: "8080"
+  REVERB_SCHEME: http
+  REVERB_SERVER_HOST: 0.0.0.0
+  REVERB_SERVER_PORT: "8080"
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: measurements
+      MYSQL_USER: measurements
+      MYSQL_PASSWORD: secret
+      MYSQL_ROOT_PASSWORD: rootsecret
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootsecret"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      <<: *backend-environment
+      RUN_MIGRATIONS: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/var/www/backend
+      - backend-vendor:/var/www/backend/vendor
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "php -r '$$socket = @fsockopen(\"127.0.0.1\", 8000, $$errno, $$errstr, 2); if ($$socket) { fclose($$socket); exit(0); } exit(1);'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  reverb:
+    build:
+      context: ./backend
+    command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
+    environment:
+      <<: *backend-environment
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/var/www/backend
+      - backend-vendor:/var/www/backend/vendor
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  queue-generation:
+    build:
+      context: ./backend
+    command: ["php", "artisan", "queue:work", "--queue=generation", "--tries=1", "--timeout=0"]
+    environment:
+      <<: *backend-environment
+    volumes:
+      - ./backend:/var/www/backend
+      - backend-vendor:/var/www/backend/vendor
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  queue-default:
+    build:
+      context: ./backend
+    command: ["php", "artisan", "queue:work", "--queue=default", "--tries=1", "--timeout=0"]
+    environment:
+      <<: *backend-environment
+    volumes:
+      - ./backend:/var/www/backend
+      - backend-vendor:/var/www/backend/vendor
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      NUXT_PUBLIC_API_BASE: http://localhost:8000
+      NUXT_PUBLIC_REVERB_APP_KEY: measurements-local-key
+      NUXT_PUBLIC_REVERB_HOST: localhost
+      NUXT_PUBLIC_REVERB_PORT: "8080"
+      NUXT_PUBLIC_REVERB_SCHEME: http
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+      reverb:
+        condition: service_started
+
+volumes:
+  mysql-data:
+  backend-vendor:
+  frontend-node-modules:
